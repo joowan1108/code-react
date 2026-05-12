@@ -1,0 +1,17 @@
+dataset:
+  root_path: data/public/input
+
+agent:
+  strategy: codeact
+  model: YOUR_MODEL_NAME
+  api_base: YOUR_OPENAI_COMPATIBLE_API_BASE
+  api_key: YOUR_API_KEY
+  max_steps: 10
+  temperature: 0.0
+  python_timeout_seconds: 45
+
+run:
+  output_dir: artifacts/runs
+  run_id: codeact_example_run
+  max_workers: 4
+  task_timeout_seconds: 300
