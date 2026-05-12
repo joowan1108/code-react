@@ -36,13 +36,27 @@ Operational rules:
 3. If Python fails, use the traceback in the next Thought as Reflexion, then fix the code.
 4. Every few steps, re-check the original question and make sure the columns and filters still match it.
 5. Avoid repeating the same failed action; pivot to a different inspection or computation.
-6. Keep only the requested output columns because extra columns are penalized.
-7. The task is complete only when you call `answer` with a table of `columns` and `rows`.
+6. Once Python has produced enough information to construct the requested table, stop exploring and submit the answer.
+7. Do not inspect more files after computing a plausible final result unless the result is clearly invalid.
+8. Keep exactly the requested output columns because extra columns are penalized.
+9. Do not include helper columns, source columns, IDs, scores, counts, explanations, or calculation columns unless the question explicitly asks for them.
+10. Before answering, mentally verify that every submitted column name is requested by the question.
+11. The task is complete only when you call `answer` with a table of `columns` and `rows`.
 
 Format rules:
-1. Always return exactly one JSON object with keys `thought`, `action`, and `action_input`.
-2. Always wrap that JSON object in exactly one fenced code block that starts with ```json and ends with ```.
-3. Do not output any text before or after the fenced JSON block.
+1. For Python execution, do not put code inside JSON. Use:
+   Thought: concise reasoning
+   Code:
+   ```python
+   executable code
+   ```
+2. For final submission, use:
+   Thought: concise reasoning
+   Answer:
+   ```json
+   {"columns":["requested_column"],"rows":[["value"]]}
+   ```
+3. JSON tool calls are still accepted for non-code tools, but Python code blocks are preferred for code execution.
 """.strip()
 
 RESPONSE_EXAMPLES = """
@@ -59,13 +73,21 @@ Example response when you have the final answer:
 
 CODEACT_RESPONSE_EXAMPLES = """
 Example response when you need to inspect data with code:
-```json
-{"thought":"I will inspect the context files with Python before deciding the joins and filters.","action":"execute_python","action_input":{"code":"from pathlib import Path\\nfor path in sorted(Path('.').rglob('*')):\\n    if path.is_file():\\n        print(path.as_posix())"}}
+Thought: I will inspect the context files with Python before deciding the joins and filters.
+Code:
+```python
+from pathlib import Path
+
+for path in sorted(Path(".").rglob("*")):
+    if path.is_file():
+        print(path.as_posix())
 ```
 
 Example response after Python has produced the final rows:
+Thought: The Python output contains the requested final table, so I will submit only those columns.
+Answer:
 ```json
-{"thought":"The Python output contains the requested final table, so I will submit only those columns.","action":"answer","action_input":{"columns":["category","total_revenue"],"rows":[["Electronics","4200000.00"],["Clothing","1850000.00"]]}}
+{"columns":["category","total_revenue"],"rows":[["Electronics","4200000.00"],["Clothing","1850000.00"]]}
 ```
 """.strip()
 
@@ -73,13 +95,24 @@ Example response after Python has produced the final rows:
 def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None) -> str:
     base_prompt = system_prompt or REACT_SYSTEM_PROMPT
     examples = CODEACT_RESPONSE_EXAMPLES if base_prompt == CODEACT_REACT_SYSTEM_PROMPT else RESPONSE_EXAMPLES
+    if base_prompt == CODEACT_REACT_SYSTEM_PROMPT:
+        final_instruction = (
+            "Return one step at a time. Prefer a `Thought:` plus fenced `Code:` block for Python, "
+            "and use `Answer:` plus fenced JSON with `columns` and `rows` for the final table. "
+            "If the previous observation contains a plausible final result, your next step should be `Answer`, "
+            "not more exploration. Do not include an `Observation:` section; the runtime will provide it."
+        )
+    else:
+        final_instruction = (
+            "You must always return a single ```json fenced block containing one JSON object "
+            "with keys `thought`, `action`, and `action_input`, and no extra text."
+        )
     return (
         f"{base_prompt}\n\n"
         "Available tools:\n"
         f"{tool_descriptions}\n\n"
         f"{examples}\n\n"
-        "You must always return a single ```json fenced block containing one JSON object "
-        "with keys `thought`, `action`, and `action_input`, and no extra text."
+        f"{final_instruction}"
     )
 
 
@@ -87,10 +120,15 @@ def build_task_prompt(task: PublicTask) -> str:
     return (
         f"Question: {task.question}\n"
         "All tool file paths are relative to the task context directory. "
-        "When you have the final table, call the `answer` tool."
+        "When you have the final table, call the `answer` tool. "
+        "The final answer should contain only the columns requested by the question."
     )
 
 
 def build_observation_prompt(observation: dict[str, object]) -> str:
     rendered = json.dumps(observation, ensure_ascii=False, indent=2)
-    return f"Observation:\n{rendered}"
+    return (
+        f"Observation:\n{rendered}\n\n"
+        "Next-step reminder: if this observation is enough to build the requested table, submit `Answer` now. "
+        "Final columns must exactly match the question and should not include helper columns."
+    )

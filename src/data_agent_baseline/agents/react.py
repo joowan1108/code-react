@@ -44,7 +44,7 @@ def _load_single_json_object(text: str) -> dict[str, object]:
     return payload
 
 
-def parse_model_step(raw_response: str) -> ModelStep:
+def _parse_json_model_step(raw_response: str) -> ModelStep:
     normalized = _strip_json_fence(raw_response)
     payload = _load_single_json_object(normalized)
 
@@ -64,6 +64,117 @@ def parse_model_step(raw_response: str) -> ModelStep:
         action_input=action_input,
         raw_response=raw_response,
     )
+
+
+def _extract_labeled_text(raw_response: str, label: str) -> str | None:
+    stop_labels = "Thought|Reflexion|Action|Code|Answer|Final Answer|Observation"
+    pattern = rf"(?:^|\n)\s*{label}\s*:\s*(.*?)(?=\n\s*(?:{stop_labels})\s*:|\Z)"
+    match = re.search(pattern, raw_response, flags=re.IGNORECASE | re.DOTALL)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def _extract_thought(raw_response: str) -> str:
+    thought = _extract_labeled_text(raw_response, "Thought")
+    if thought is not None:
+        return thought
+    reflexion = _extract_labeled_text(raw_response, "Reflexion")
+    if reflexion is not None:
+        return reflexion
+    return "Using CodeAct fallback parser."
+
+
+def _load_first_json_object(text: str) -> dict[str, object]:
+    json_fence = re.search(r"```json\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    candidate = json_fence.group(1).strip() if json_fence is not None else text.strip()
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(candidate):
+        if character != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(candidate[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    raise ValueError("No JSON object found.")
+
+
+def _extract_answer_step(raw_response: str) -> ModelStep | None:
+    answer_text = _extract_labeled_text(raw_response, "Final Answer")
+    if answer_text is None:
+        answer_text = _extract_labeled_text(raw_response, "Answer")
+    if answer_text is None:
+        return None
+
+    payload = _load_first_json_object(answer_text)
+    if payload.get("action") == "answer" and isinstance(payload.get("action_input"), dict):
+        action_input = payload["action_input"]
+    else:
+        action_input = payload
+
+    return ModelStep(
+        thought=_extract_thought(raw_response),
+        action="answer",
+        action_input=action_input,
+        raw_response=raw_response,
+    )
+
+
+def _extract_code_block(raw_response: str) -> str | None:
+    code_after_label = re.search(
+        r"(?:^|\n)\s*Code\s*:\s*```(?:python|py)?\s*(.*?)\s*```",
+        raw_response,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if code_after_label is not None:
+        return code_after_label.group(1).strip()
+
+    for match in re.finditer(
+        r"```(?P<label>[a-zA-Z0-9_+-]*)\s*(?P<body>.*?)\s*```",
+        raw_response,
+        flags=re.DOTALL,
+    ):
+        label = match.group("label").strip().lower()
+        if label in {"python", "py"}:
+            return match.group("body").strip()
+
+    code_text = _extract_labeled_text(raw_response, "Code")
+    if code_text is not None:
+        return code_text
+    return None
+
+
+def _parse_codeact_model_step(raw_response: str) -> ModelStep:
+    answer_step = _extract_answer_step(raw_response)
+    if answer_step is not None:
+        return answer_step
+
+    code = _extract_code_block(raw_response)
+    if code:
+        return ModelStep(
+            thought=_extract_thought(raw_response),
+            action="execute_python",
+            action_input={"code": code},
+            raw_response=raw_response,
+        )
+
+    raise ValueError("Model response is neither a JSON action nor a CodeAct code/answer block.")
+
+
+def parse_model_step(raw_response: str) -> ModelStep:
+    try:
+        return _parse_json_model_step(raw_response)
+    except Exception as json_exc:
+        try:
+            return _parse_codeact_model_step(raw_response)
+        except Exception as codeact_exc:
+            raise ValueError(
+                "Could not parse model response. "
+                f"JSON parser error: {json_exc}; CodeAct parser error: {codeact_exc}"
+            ) from json_exc
 
 
 class ReActAgent:

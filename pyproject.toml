@@ -9,9 +9,7 @@ description = "ReAct-style baseline for the DABench data-agent benchmark"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "datasets>=3.3.2",
     "duckdb>=1.5.0",
-    "huggingface-hub>=0.29.3",
     "numpy>=2.2.6",
     "openai>=2.28.0",
     "openpyxl>=3.1.5",
