@@ -30,6 +30,12 @@ class AgentConfig:
     max_steps: int = 16
     temperature: float = 0.0
     python_timeout_seconds: int = 45
+    prompt_history_steps: int = 4
+    full_observation_threshold: int = 6000
+    observation_head_chars: int = 1800
+    observation_tail_chars: int = 1800
+    stderr_tail_chars: int = 4000
+    final_marker_chars: int = 4000
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +85,18 @@ def load_app_config(config_path: Path) -> AppConfig:
         python_timeout_seconds=int(
             agent_payload.get("python_timeout_seconds", agent_defaults.python_timeout_seconds)
         ),
+        prompt_history_steps=int(agent_payload.get("prompt_history_steps", agent_defaults.prompt_history_steps)),
+        full_observation_threshold=int(
+            agent_payload.get("full_observation_threshold", agent_defaults.full_observation_threshold)
+        ),
+        observation_head_chars=int(
+            agent_payload.get("observation_head_chars", agent_defaults.observation_head_chars)
+        ),
+        observation_tail_chars=int(
+            agent_payload.get("observation_tail_chars", agent_defaults.observation_tail_chars)
+        ),
+        stderr_tail_chars=int(agent_payload.get("stderr_tail_chars", agent_defaults.stderr_tail_chars)),
+        final_marker_chars=int(agent_payload.get("final_marker_chars", agent_defaults.final_marker_chars)),
     )
     raw_run_id = run_payload.get("run_id")
     run_id = run_defaults.run_id

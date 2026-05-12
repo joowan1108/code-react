@@ -114,7 +114,15 @@ def _run_single_task_core(
         or create_default_tool_registry(
             python_timeout_seconds=config.agent.python_timeout_seconds,
         ),
-        config=ReActAgentConfig(max_steps=config.agent.max_steps),
+        config=ReActAgentConfig(
+            max_steps=config.agent.max_steps,
+            prompt_history_steps=config.agent.prompt_history_steps,
+            full_observation_threshold=config.agent.full_observation_threshold,
+            observation_head_chars=config.agent.observation_head_chars,
+            observation_tail_chars=config.agent.observation_tail_chars,
+            stderr_tail_chars=config.agent.stderr_tail_chars,
+            final_marker_chars=config.agent.final_marker_chars,
+        ),
         system_prompt=system_prompt,
     )
     run_result = agent.run(task)

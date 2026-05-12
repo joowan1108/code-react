@@ -19,6 +19,19 @@ from data_agent_baseline.tools.registry import ToolRegistry
 @dataclass(frozen=True, slots=True)
 class ReActAgentConfig:
     max_steps: int = 16
+    prompt_history_steps: int = 4
+    full_observation_threshold: int = 6000
+    observation_head_chars: int = 1800
+    observation_tail_chars: int = 1800
+    stderr_tail_chars: int = 4000
+    final_marker_chars: int = 4000
+
+
+FINAL_RESULT_MARKERS = (
+    "FINAL_TABLE_JSON:",
+    "FINAL_RESULT:",
+    "ANSWER_CANDIDATE:",
+)
 
 
 def _strip_json_fence(raw_response: str) -> str:
@@ -177,6 +190,173 @@ def parse_model_step(raw_response: str) -> ModelStep:
             ) from json_exc
 
 
+def _safe_json_dumps(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except TypeError:
+        return str(value)
+
+
+def _find_final_marker_segment(text: str, max_chars: int) -> str | None:
+    if max_chars <= 0:
+        return None
+    lower_text = text.lower()
+    best_index: int | None = None
+    for marker in FINAL_RESULT_MARKERS:
+        index = lower_text.find(marker.lower())
+        if index >= 0 and (best_index is None or index < best_index):
+            best_index = index
+    if best_index is None:
+        return None
+    segment = text[best_index : best_index + max_chars]
+    omitted = len(text) - (best_index + len(segment))
+    if omitted > 0:
+        segment = f"{segment}\n...[final marker segment truncated {omitted} chars]"
+    return segment
+
+
+def _compact_text_block(
+    label: str,
+    text: str,
+    *,
+    head_chars: int,
+    tail_chars: int,
+    final_marker_chars: int,
+) -> list[str]:
+    if not text:
+        return [f"{label}: <empty>"]
+
+    if len(text) <= head_chars + tail_chars:
+        return [f"{label}_chars: {len(text)}", f"{label}:\n{text}"]
+
+    head = text[: max(0, head_chars)]
+    tail = text[-max(0, tail_chars) :] if tail_chars > 0 else ""
+    omitted = max(0, len(text) - len(head) - len(tail))
+    lines = [f"{label}_chars: {len(text)}"]
+    if head:
+        lines.append(f"{label}_head:\n{head}")
+    marker_segment = _find_final_marker_segment(text, final_marker_chars)
+    if marker_segment is not None:
+        lines.append(f"{label}_final_marker_segment:\n{marker_segment}")
+    if tail:
+        lines.append(f"{label}_tail:\n{tail}")
+    lines.append(f"{label}_compact_note: omitted {omitted} middle chars")
+    return lines
+
+
+def _compact_generic_value(key: str, value: object, config: ReActAgentConfig) -> list[str]:
+    if isinstance(value, str):
+        return _compact_text_block(
+            key,
+            value,
+            head_chars=config.observation_head_chars,
+            tail_chars=config.observation_tail_chars,
+            final_marker_chars=config.final_marker_chars,
+        )
+
+    rendered = _safe_json_dumps(value)
+    return _compact_text_block(
+        key,
+        rendered,
+        head_chars=config.observation_head_chars,
+        tail_chars=config.observation_tail_chars,
+        final_marker_chars=config.final_marker_chars,
+    )
+
+
+def _render_compact_python_observation(
+    observation: dict[str, object],
+    config: ReActAgentConfig,
+    original_chars: int,
+) -> str:
+    content = observation.get("content")
+    if not isinstance(content, dict):
+        return _render_compact_generic_observation(observation, config, original_chars)
+
+    lines = [
+        "compact_observation: true",
+        f"original_observation_chars: {original_chars}",
+        f"ok: {observation.get('ok')}",
+        f"tool: {observation.get('tool')}",
+    ]
+    for key, value in content.items():
+        if key in {"output", "stdout", "stderr", "traceback"}:
+            continue
+        lines.append(f"{key}: {_safe_json_dumps(value) if isinstance(value, (dict, list)) else value}")
+
+    stdout = str(content.get("output") or content.get("stdout") or "")
+    stderr = str(content.get("stderr") or "")
+    traceback_text = str(content.get("traceback") or "")
+
+    if stdout:
+        lines.extend(
+            _compact_text_block(
+                "stdout",
+                stdout,
+                head_chars=config.observation_head_chars,
+                tail_chars=config.observation_tail_chars,
+                final_marker_chars=config.final_marker_chars,
+            )
+        )
+    if stderr:
+        lines.extend(
+            _compact_text_block(
+                "stderr",
+                stderr,
+                head_chars=0,
+                tail_chars=config.stderr_tail_chars,
+                final_marker_chars=0,
+            )
+        )
+    if traceback_text:
+        lines.extend(
+            _compact_text_block(
+                "traceback",
+                traceback_text,
+                head_chars=0,
+                tail_chars=config.stderr_tail_chars,
+                final_marker_chars=0,
+            )
+        )
+    return "\n\n".join(lines)
+
+
+def _render_compact_generic_observation(
+    observation: dict[str, object],
+    config: ReActAgentConfig,
+    original_chars: int,
+) -> str:
+    lines = [
+        "compact_observation: true",
+        f"original_observation_chars: {original_chars}",
+        f"ok: {observation.get('ok')}",
+        f"tool: {observation.get('tool', '<none>')}",
+    ]
+    for key, value in observation.items():
+        if key in {"ok", "tool"}:
+            continue
+        if isinstance(value, dict):
+            lines.append(f"{key}:")
+            for child_key, child_value in value.items():
+                rendered_lines = _compact_generic_value(str(child_key), child_value, config)
+                lines.append("\n".join(rendered_lines))
+        else:
+            lines.extend(_compact_generic_value(str(key), value, config))
+    return "\n\n".join(lines)
+
+
+def _render_observation_for_prompt(
+    observation: dict[str, object],
+    config: ReActAgentConfig,
+) -> str:
+    rendered = _safe_json_dumps(observation)
+    if len(rendered) <= config.full_observation_threshold:
+        return rendered
+    if observation.get("tool") == "execute_python":
+        return _render_compact_python_observation(observation, config, len(rendered))
+    return _render_compact_generic_observation(observation, config, len(rendered))
+
+
 class ReActAgent:
     def __init__(
         self,
@@ -198,10 +378,18 @@ class ReActAgent:
         )
         messages = [ModelMessage(role="system", content=system_content)]
         messages.append(ModelMessage(role="user", content=build_task_prompt(task)))
-        for step in state.steps:
+        history_steps = state.steps
+        if self.config.prompt_history_steps > 0:
+            history_steps = history_steps[-self.config.prompt_history_steps :]
+        for step in history_steps:
             messages.append(ModelMessage(role="assistant", content=step.raw_response))
             messages.append(
-                ModelMessage(role="user", content=build_observation_prompt(step.observation))
+                ModelMessage(
+                    role="user",
+                    content=build_observation_prompt(
+                        _render_observation_for_prompt(step.observation, self.config)
+                    ),
+                )
             )
         return messages
 

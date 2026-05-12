@@ -41,7 +41,9 @@ Operational rules:
 8. Keep exactly the requested output columns because extra columns are penalized.
 9. Do not include helper columns, source columns, IDs, scores, counts, explanations, or calculation columns unless the question explicitly asks for them.
 10. Before answering, mentally verify that every submitted column name is requested by the question.
-11. The task is complete only when you call `answer` with a table of `columns` and `rows`.
+11. Keep Python output concise: print shapes, columns, dtypes, small samples, and computed candidate rows; do not print full files, full JSON records, or full dataframes.
+12. When Python computes a candidate final table, print it after the marker `FINAL_TABLE_JSON:` so the runtime can preserve it in compact observations.
+13. The task is complete only when you call `answer` with a table of `columns` and `rows`.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -100,7 +102,8 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "Return one step at a time. Prefer a `Thought:` plus fenced `Code:` block for Python, "
             "and use `Answer:` plus fenced JSON with `columns` and `rows` for the final table. "
             "If the previous observation contains a plausible final result, your next step should be `Answer`, "
-            "not more exploration. Do not include an `Observation:` section; the runtime will provide it."
+            "not more exploration. When printing candidate rows from Python, prefix them with `FINAL_TABLE_JSON:`. "
+            "Do not include an `Observation:` section; the runtime will provide it."
         )
     else:
         final_instruction = (
@@ -125,8 +128,11 @@ def build_task_prompt(task: PublicTask) -> str:
     )
 
 
-def build_observation_prompt(observation: dict[str, object]) -> str:
-    rendered = json.dumps(observation, ensure_ascii=False, indent=2)
+def build_observation_prompt(observation: dict[str, object] | str) -> str:
+    if isinstance(observation, str):
+        rendered = observation
+    else:
+        rendered = json.dumps(observation, ensure_ascii=False, indent=2)
     return (
         f"Observation:\n{rendered}\n\n"
         "Next-step reminder: if this observation is enough to build the requested table, submit `Answer` now. "
