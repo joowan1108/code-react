@@ -28,8 +28,8 @@ def _capture_process_streams(stdout_path: Path, stderr_path: Path):
             os.dup2(stdout_file.fileno(), 1)
             os.dup2(stderr_file.fileno(), 2)
 
-            stdout_encoding = getattr(original_stdout, "encoding", None) or "utf-8"
-            stderr_encoding = getattr(original_stderr, "encoding", None) or "utf-8"
+            stdout_encoding = "utf-8"
+            stderr_encoding = "utf-8"
 
             sys.stdout = io.TextIOWrapper(
                 os.fdopen(os.dup(1), "wb"),
@@ -71,22 +71,29 @@ def _read_captured_stream(path: Path) -> str:
 
 def _run_python_code(
     context_root: str,
+    working_dir: str,
     code: str,
     stdout_path: str,
     stderr_path: str,
     queue: multiprocessing.Queue[Any],
 ) -> None:
+    resolved_context_root = Path(context_root).resolve()
+    resolved_working_dir = Path(working_dir).resolve()
     namespace: dict[str, Any] = {
         "__builtins__": __builtins__,
         "__name__": "__main__",
-        "context_root": context_root,
+        "context_root": str(resolved_context_root),
+        "CONTEXT_ROOT": str(resolved_context_root),
+        "work_dir": str(resolved_working_dir),
+        "WORK_DIR": str(resolved_working_dir),
         "Path": Path,
     }
     resolved_stdout_path = Path(stdout_path)
     resolved_stderr_path = Path(stderr_path)
 
     try:
-        os.chdir(context_root)
+        resolved_working_dir.mkdir(parents=True, exist_ok=True)
+        os.chdir(resolved_working_dir)
         with _capture_process_streams(resolved_stdout_path, resolved_stderr_path):
             exec(code, namespace, namespace)
         queue.put({"success": True})
@@ -100,19 +107,27 @@ def _run_python_code(
         )
 
 
-def execute_python_code(context_root: Path, code: str, *, timeout_seconds: int = 30) -> dict[str, Any]:
+def execute_python_code(
+    context_root: Path,
+    code: str,
+    *,
+    timeout_seconds: int = 30,
+    working_dir: Path | None = None,
+) -> dict[str, Any]:
     resolved_context_root = context_root.resolve()
+    resolved_working_dir = (working_dir or context_root).resolve()
     with tempfile.TemporaryDirectory() as temp_dir:
         stdout_path = Path(temp_dir) / "stdout.txt"
         stderr_path = Path(temp_dir) / "stderr.txt"
-        stdout_path.write_text("")
-        stderr_path.write_text("")
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
 
         queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
         process = multiprocessing.Process(
             target=_run_python_code,
             args=(
                 resolved_context_root.as_posix(),
+                resolved_working_dir.as_posix(),
                 code,
                 stdout_path.as_posix(),
                 stderr_path.as_posix(),

@@ -70,12 +70,17 @@ def _execute_context_sql(task: PublicTask, action_input: dict[str, Any]) -> Tool
     return ToolExecutionResult(ok=True, content=execute_read_only_sql(path, sql, limit=limit))
 
 
-def _execute_python(task: PublicTask, action_input: dict[str, Any]) -> ToolExecutionResult:
+def _execute_python(
+    task: PublicTask,
+    action_input: dict[str, Any],
+    *,
+    timeout_seconds: int = EXECUTE_PYTHON_TIMEOUT_SECONDS,
+) -> ToolExecutionResult:
     code = str(action_input["code"])
     content = execute_python_code(
         context_root=task.context_dir,
         code=code,
-        timeout_seconds=EXECUTE_PYTHON_TIMEOUT_SECONDS,
+        timeout_seconds=timeout_seconds,
     )
     return ToolExecutionResult(ok=bool(content.get("success")), content=content)
 
@@ -128,7 +133,10 @@ class ToolRegistry:
         return self.handlers[action](task, action_input)
 
 
-def create_default_tool_registry() -> ToolRegistry:
+def create_default_tool_registry(
+    *,
+    python_timeout_seconds: int = EXECUTE_PYTHON_TIMEOUT_SECONDS,
+) -> ToolRegistry:
     specs = {
         "answer": ToolSpec(
             name="answer",
@@ -148,7 +156,7 @@ def create_default_tool_registry() -> ToolRegistry:
             description=(
                 "Execute arbitrary Python code with the task context directory as the "
                 "working directory. The tool returns the code's captured stdout as `output`. "
-                f"The execution timeout is fixed at {EXECUTE_PYTHON_TIMEOUT_SECONDS} seconds."
+                f"The execution timeout is fixed at {python_timeout_seconds} seconds."
             ),
             input_schema={
                 "code": "import os\nprint(sorted(os.listdir('.')))",
@@ -183,7 +191,11 @@ def create_default_tool_registry() -> ToolRegistry:
     handlers = {
         "answer": _answer,
         "execute_context_sql": _execute_context_sql,
-        "execute_python": _execute_python,
+        "execute_python": lambda task, action_input: _execute_python(
+            task,
+            action_input,
+            timeout_seconds=python_timeout_seconds,
+        ),
         "inspect_sqlite_schema": _inspect_sqlite_schema,
         "list_context": _list_context,
         "read_csv": _read_csv,

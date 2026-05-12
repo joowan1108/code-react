@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Any
 
 from data_agent_baseline.agents.model import OpenAIModelAdapter
+from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT
 from data_agent_baseline.agents.react import ReActAgent, ReActAgentConfig
 from data_agent_baseline.benchmark.dataset import DABenchPublicDataset
 from data_agent_baseline.config import AppConfig
@@ -71,12 +72,12 @@ def build_model_adapter(config: AppConfig):
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _write_csv(path: Path, columns: list[str], rows: list[list[Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as handle:
+    with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(columns)
         for row in rows:
@@ -103,10 +104,18 @@ def _run_single_task_core(
     public_dataset = DABenchPublicDataset(config.dataset.root_path)
     task = public_dataset.get_task(task_id)
 
+    effective_model = model or build_model_adapter(config)
+    if config.agent.strategy not in {"react", "codeact"}:
+        raise ValueError(f"Unknown agent.strategy: {config.agent.strategy}")
+    system_prompt = CODEACT_REACT_SYSTEM_PROMPT if config.agent.strategy == "codeact" else None
     agent = ReActAgent(
-        model=model or build_model_adapter(config),
-        tools=tools or create_default_tool_registry(),
+        model=effective_model,
+        tools=tools
+        or create_default_tool_registry(
+            python_timeout_seconds=config.agent.python_timeout_seconds,
+        ),
         config=ReActAgentConfig(max_steps=config.agent.max_steps),
+        system_prompt=system_prompt,
     )
     run_result = agent.run(task)
     return run_result.to_dict()
@@ -234,7 +243,9 @@ def run_benchmark(
     task_artifacts: list[TaskRunArtifacts]
     if effective_workers == 1:
         shared_model = model or build_model_adapter(config)
-        shared_tools = tools or create_default_tool_registry()
+        shared_tools = tools or create_default_tool_registry(
+            python_timeout_seconds=config.agent.python_timeout_seconds,
+        )
         task_artifacts = []
         for task_id in task_ids:
             artifact = run_single_task(

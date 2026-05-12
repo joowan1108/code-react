@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 dabench = "data_agent_baseline.cli:main"
+dabench-submit = "data_agent_baseline.run.submission:main"
 
 [tool.ruff]
 line-length = 100

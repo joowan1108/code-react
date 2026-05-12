@@ -50,6 +50,60 @@ English | [中文](README.zh.md)
    uv run dabench run-benchmark --config configs/react_baseline.example.yaml
    ```
 
+## Competition-Ready CodeAct ReAct
+
+The starter-kit ReAct agent now has a CodeAct-style mode. It is still the same ReAct loop and tool registry: the model returns `thought`, chooses an `action`, receives an `Observation`, and repeats. In `agent.strategy: codeact`, the prompt makes `execute_python` the main action, so the agent solves tasks by writing code and then calls `answer` with the final table.
+
+The official submission entrypoint is aligned with the KDD Cup 2026 rules:
+
+- Reads all tasks from `/input/task_<id>/task.json`.
+- Uses only `MODEL_API_URL`, `MODEL_API_KEY`, and `MODEL_NAME` for the OpenAI-compatible model endpoint.
+- Executes Python analysis code through the existing `execute_python` tool.
+- Writes exactly `/output/task_<id>/prediction.csv` for each task.
+- Streams runtime progress to `/logs/runtime.log` and writes a secret-safe `/logs/summary.json`.
+
+Local CodeAct run:
+
+```bash
+uv run dabench run-benchmark --config configs/codeact_competition.example.yaml --limit 3
+```
+
+Official-style local run:
+
+```bash
+MODEL_API_URL=http://your-openai-compatible-endpoint/v1 \
+MODEL_API_KEY=your_key \
+MODEL_NAME=your_model \
+uv run dabench run-submission \
+  --input-root data/public/input \
+  --output-root artifacts/submission_output \
+  --logs-root artifacts/submission_logs
+```
+
+Build the submission image for the competition's `linux/amd64` environment:
+
+```bash
+docker build --platform=linux/amd64 -t <team_id>:v<N> .
+docker save <team_id>:v<N> | gzip > <team_id>_v<N>.tar.gz
+```
+
+Useful environment overrides:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AGENT_MAX_WORKERS` | `4` | Parallel tasks. |
+| `AGENT_TASK_TIMEOUT_SECONDS` | `300` | Per-task wall-clock timeout. |
+| `AGENT_MAX_STEPS` | `10` | ReAct iterations per task. |
+| `AGENT_PYTHON_TIMEOUT_SECONDS` | `45` | Timeout for each executed Python block. |
+| `AGENT_WRITE_FAILURE_STUB` | `1` | Write a valid zero-score CSV if a task fails. |
+| `MODEL_API_URL_APPEND_V1` | `auto` | Append `/v1` to `MODEL_API_URL` unless it already ends with `/v1`; set `0` to disable. |
+
+Approximate local public scoring:
+
+```bash
+uv run dabench evaluate-run --prediction-root artifacts/submission_output
+```
+
 ## Dataset
 
 The public demo dataset lives under `data/public/input/`. Each task directory follows this structure:
@@ -85,11 +139,13 @@ dataset:
   root_path: data/public/input
 
 agent:
+  strategy: codeact
   model: YOUR_MODEL_NAME
   api_base: YOUR_API_BASE_URL
   api_key: YOUR_API_KEY
   max_steps: 16
   temperature: 0.0
+  python_timeout_seconds: 45
 
 run:
   output_dir: artifacts/runs
@@ -103,10 +159,11 @@ Config fields:
 | Field | Meaning |
 | --- | --- |
 | `dataset.root_path` | Root directory of the public demo `input/` dataset. Relative paths are resolved from the project root. |
+| `agent.strategy` | `codeact` for the competition runner, or `react` for the original JSON-tool baseline. |
 | `agent.model` | Model name. |
 | `agent.api_base` | OpenAI-compatible API base URL. |
 | `agent.api_key` | API key, read directly from the config file. |
-| `agent.max_steps` | Maximum ReAct steps per task. |
+| `agent.max_steps` | Maximum agent iterations per task. |
 | `agent.temperature` | Sampling temperature. |
 | `run.output_dir` | Output directory for run artifacts. |
 | `run.run_id` | Optional run directory name. Defaults to a UTC timestamp if omitted. Must be a single directory name; existing run directories are rejected. |

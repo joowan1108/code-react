@@ -14,9 +14,11 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from data_agent_baseline.benchmark.evaluate import score_run
 from data_agent_baseline.benchmark.dataset import DABenchPublicDataset
 from data_agent_baseline.config import load_app_config
 from data_agent_baseline.run.runner import TaskRunArtifacts, create_run_output_dir, run_benchmark, run_single_task
+from data_agent_baseline.run.submission import run_submission
 from data_agent_baseline.tools.filesystem import list_context_tree
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -257,5 +259,39 @@ def run_benchmark_command(
     console.print(f"Succeeded tasks: {sum(1 for item in artifacts if item.succeeded)}")
 
 
+@app.command("run-submission")
+def run_submission_command(
+    input_root: Path = typer.Option(Path("/input"), help="Competition input root."),
+    output_root: Path = typer.Option(Path("/output"), help="Competition output root."),
+    logs_root: Path = typer.Option(Path("/logs"), help="Competition logs root."),
+) -> None:
+    """Run the official submission entrypoint against /input and /output style roots."""
+    summary = run_submission(input_root=input_root, output_root=output_root, logs_root=logs_root)
+    console.print(f"Tasks attempted: {summary['task_count']}")
+    console.print(f"Succeeded tasks: {summary['succeeded_task_count']}")
+    console.print(f"Elapsed seconds: {summary['elapsed_seconds']}")
+
+
+@app.command("evaluate-run")
+def evaluate_run_command(
+    prediction_root: Path = typer.Option(..., exists=True, file_okay=False, help="Root with task_<id>/prediction.csv."),
+    gold_root: Path = typer.Option(
+        DATA_DIR / "public" / "output",
+        exists=True,
+        file_okay=False,
+        help="Root with task_<id>/gold.csv.",
+    ),
+    penalty_lambda: float = typer.Option(0.1, min=0.0, help="Extra-column penalty lambda."),
+) -> None:
+    """Approximate the public column-signature score for a local run."""
+    report = score_run(prediction_root, gold_root, penalty_lambda=penalty_lambda)
+    console.print(f"Task count: {report['task_count']}")
+    console.print(f"Average score: {report['average_score']:.4f}")
+
+
 def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()

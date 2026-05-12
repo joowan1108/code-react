@@ -23,11 +23,13 @@ class DatasetConfig:
 
 @dataclass(frozen=True, slots=True)
 class AgentConfig:
+    strategy: str = "codeact"
     model: str = "gpt-4.1-mini"
     api_base: str = "https://api.openai.com/v1"
     api_key: str = ""
     max_steps: int = 16
     temperature: float = 0.0
+    python_timeout_seconds: int = 45
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +57,7 @@ def _path_value(raw_value: str | None, default_value: Path) -> Path:
 
 
 def load_app_config(config_path: Path) -> AppConfig:
-    payload = yaml.safe_load(config_path.read_text()) or {}
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     dataset_defaults = DatasetConfig()
     agent_defaults = AgentConfig()
     run_defaults = RunConfig()
@@ -68,11 +70,15 @@ def load_app_config(config_path: Path) -> AppConfig:
         root_path=_path_value(dataset_payload.get("root_path"), dataset_defaults.root_path),
     )
     agent_config = AgentConfig(
+        strategy=str(agent_payload.get("strategy", agent_defaults.strategy)).strip().lower(),
         model=str(agent_payload.get("model", agent_defaults.model)),
         api_base=str(agent_payload.get("api_base", agent_defaults.api_base)),
         api_key=str(agent_payload.get("api_key", agent_defaults.api_key)),
         max_steps=int(agent_payload.get("max_steps", agent_defaults.max_steps)),
         temperature=float(agent_payload.get("temperature", agent_defaults.temperature)),
+        python_timeout_seconds=int(
+            agent_payload.get("python_timeout_seconds", agent_defaults.python_timeout_seconds)
+        ),
     )
     raw_run_id = run_payload.get("run_id")
     run_id = run_defaults.run_id

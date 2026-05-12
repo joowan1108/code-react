@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -40,19 +41,21 @@ class OpenAIModelAdapter:
         self.temperature = temperature
 
     def complete(self, messages: list[ModelMessage]) -> str:
-        if not self.api_key:
-            raise RuntimeError("Missing model API key in config.agent.api_key.")
+        if not self.api_base:
+            raise RuntimeError("Missing model API base URL.")
 
         client = OpenAI(
-            api_key=self.api_key,
+            api_key=self.api_key or "EMPTY",
             base_url=self.api_base,
+            timeout=float(os.environ.get("MODEL_REQUEST_TIMEOUT_SECONDS", "180")),
+            max_retries=int(os.environ.get("MODEL_MAX_RETRIES", "2")),
         )
 
         try:
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": message.role, "content": message.content} for message in messages],
-                temperature=self.temperature
+                temperature=self.temperature,
             )
         except APIError as exc:
             raise RuntimeError(f"Model request failed: {exc}") from exc
