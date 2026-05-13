@@ -34,8 +34,9 @@ Operational rules:
 5. If Python fails, use the traceback as Reflexion and fix the code without repeating the same failed action.
 6. Keep exactly the requested output columns; extra columns are penalized.
 7. Keep Python output concise: print shapes, columns, small samples, and candidate rows, not full files or full dataframes.
-8. When Python computes a candidate final table, print it after `FINAL_TABLE_JSON:` as JSON with `columns` and `rows`.
-9. Once a plausible final result exists, submit `Answer` immediately.
+8. Print `FINAL_TABLE_JSON:` only when the JSON is the exact final answer table to submit.
+9. Never use `FINAL_TABLE_JSON:` for samples, previews, intermediate candidates, or debug output.
+10. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -67,20 +68,29 @@ Example response when you have the final answer:
 
 CODEACT_RESPONSE_EXAMPLES = """
 Example response when you need to inspect data with code:
-Thought: I will use the manifest to load the likely relevant tables and compute a compact candidate result.
+Thought: I will use the manifest to load the likely relevant table and inspect a compact sample.
 Code:
 ```python
-import json
-from pathlib import Path
-
 import pandas as pd
 
 data = pd.read_csv("csv/relevant_table.csv")
 print("columns:", data.columns.tolist())
 print("shape:", data.shape)
-candidate = data.head(3)[["requested_column"]]
+print(data.head(3).to_string(index=False))
+```
+
+Example response when Python can compute the exact final table:
+Thought: I can compute the requested final rows directly and print only the final table marker.
+Code:
+```python
+import json
+import pandas as pd
+
+data = pd.read_csv("csv/relevant_table.csv")
+answer = data.groupby("category", as_index=False)["revenue"].sum()
+answer = answer.rename(columns={"revenue": "total_revenue"})
 print("FINAL_TABLE_JSON:")
-print(json.dumps({"columns": candidate.columns.tolist(), "rows": candidate.astype(str).values.tolist()}))
+print(json.dumps({"columns": answer.columns.tolist(), "rows": answer.values.tolist()}))
 ```
 
 Example response after Python has produced the final rows:
@@ -100,8 +110,9 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "Return one step at a time. Prefer a `Thought:` plus fenced `Code:` block for Python, "
             "and use `Answer:` plus fenced JSON with `columns` and `rows` for the final table. "
             "If the previous observation contains a plausible final result, your next step should be `Answer`, "
-            "not more exploration. When printing candidate rows from Python, prefix them with `FINAL_TABLE_JSON:`. "
-            "Do not include an `Observation:` section; the runtime will provide it."
+            "not more exploration. When printing final rows from Python, prefix them with `FINAL_TABLE_JSON:`. "
+            "`FINAL_TABLE_JSON:` is only for the exact final answer table, never for previews or samples. "
+            "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
         )
     else:
         final_instruction = (
@@ -128,7 +139,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "Use it to choose a focused Python computation or a compact targeted inspection. "
             "All file paths are relative to the task context directory. "
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
-            "JSON with `columns` and `rows`, then submit `Answer` in the next step. "
+            "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
             "The final answer should contain only the columns requested by the question."
         )
     return (

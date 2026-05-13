@@ -81,7 +81,7 @@ def _parse_json_model_step(raw_response: str) -> ModelStep:
 
 
 def _extract_labeled_text(raw_response: str, label: str) -> str | None:
-    stop_labels = "Thought|Reflexion|Action|Code|Answer|Final Answer|Observation"
+    stop_labels = "Thought|Reflexion|Action|Code|Output|Answer|Final Answer|Observation"
     pattern = rf"(?:^|\n)\s*{label}\s*:\s*(.*?)(?=\n\s*(?:{stop_labels})\s*:|\Z)"
     match = re.search(pattern, raw_response, flags=re.IGNORECASE | re.DOTALL)
     if match is None:
@@ -162,10 +162,6 @@ def _extract_code_block(raw_response: str) -> str | None:
 
 
 def _parse_codeact_model_step(raw_response: str) -> ModelStep:
-    answer_step = _extract_answer_step(raw_response)
-    if answer_step is not None:
-        return answer_step
-
     code = _extract_code_block(raw_response)
     if code:
         return ModelStep(
@@ -174,6 +170,10 @@ def _parse_codeact_model_step(raw_response: str) -> ModelStep:
             action_input={"code": code},
             raw_response=raw_response,
         )
+
+    answer_step = _extract_answer_step(raw_response)
+    if answer_step is not None:
+        return answer_step
 
     raise ValueError("Model response is neither a JSON action nor a CodeAct code/answer block.")
 
@@ -196,6 +196,142 @@ def _safe_json_dumps(value: object) -> str:
         return json.dumps(value, ensure_ascii=False, indent=2)
     except TypeError:
         return str(value)
+
+
+def _split_identifier_tokens(text: str) -> set[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    tokens = {token.lower() for token in re.findall(r"[A-Za-z0-9]+", spaced)}
+    expanded: set[str] = set()
+    for token in tokens:
+        if not token:
+            continue
+        expanded.add(token)
+        if len(token) > 3 and token.endswith("s"):
+            expanded.add(token[:-1])
+    return expanded
+
+
+def _question_schema_tokens(question: str) -> set[str]:
+    tokens = _split_identifier_tokens(question)
+    aliases: set[str] = set()
+    if tokens & {"who", "whose"}:
+        aliases.update({"user", "person", "people", "name", "author", "customer", "player", "owner"})
+    if tokens & {"when"}:
+        aliases.update({"date", "time", "year", "month", "day", "created", "creation"})
+    if tokens & {"where"}:
+        aliases.update({"location", "place", "country", "city", "state", "region"})
+    if tokens & {"how", "many", "count", "number"}:
+        aliases.update({"count", "number", "total", "n", "frequency"})
+    if tokens & {"average", "avg", "mean"}:
+        aliases.update({"average", "avg", "mean"})
+    if tokens & {"sum", "total"}:
+        aliases.update({"sum", "total"})
+    if tokens & {"percentage", "percent"}:
+        aliases.update({"percentage", "percent", "ratio", "rate", "share"})
+    if tokens & {"ratio", "rate", "proportion"}:
+        aliases.update({"ratio", "rate", "proportion", "percentage", "percent"})
+    if tokens & {"comment", "comments", "post", "posts", "text"}:
+        aliases.update({"comment", "comments", "post", "posts", "text", "body", "content", "title"})
+    if tokens & {"amount", "revenue", "price", "cost", "sales"}:
+        aliases.update({"amount", "revenue", "price", "cost", "sale", "sales", "value"})
+    return tokens | aliases
+
+
+def _normalize_answer_cell(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip().replace("\r\n", "\n").replace("\r", "\n")
+    if not text:
+        return text
+
+    percent_match = re.fullmatch(r"([-+]?\d[\d,]*(?:\.\d+)?)\s*%", text)
+    if percent_match is not None:
+        return percent_match.group(1).replace(",", "")
+
+    numeric_with_commas = re.fullmatch(r"[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?", text)
+    if numeric_with_commas is not None:
+        return text.replace(",", "")
+
+    currency_match = re.fullmatch(r"[$]\s*([-+]?\d[\d,]*(?:\.\d+)?)", text)
+    if currency_match is not None:
+        return currency_match.group(1).replace(",", "")
+
+    return text
+
+
+def _drop_obvious_helper_columns(task: PublicTask, answer: AnswerTable) -> AnswerTable:
+    if len(answer.columns) < 2:
+        return answer
+
+    question_tokens = _question_schema_tokens(task.question)
+    helper_tokens = {
+        "id",
+        "index",
+        "idx",
+        "row",
+        "rank",
+        "type",
+        "operation",
+        "date",
+        "time",
+        "year",
+        "month",
+        "day",
+        "created",
+        "creation",
+        "updated",
+        "modified",
+    }
+    keep_indices: list[int] = []
+    for index, column in enumerate(answer.columns):
+        column_tokens = _split_identifier_tokens(column)
+        joined_column = re.sub(r"[^a-z0-9]+", "", column.lower())
+        joined_requested = len(joined_column) >= 3 and joined_column in task.question.lower().replace(" ", "")
+        directly_requested = bool(column_tokens & question_tokens) or joined_requested
+        obvious_helper = bool(column_tokens & helper_tokens) and not directly_requested
+        if directly_requested or not obvious_helper:
+            keep_indices.append(index)
+
+    if not keep_indices or len(keep_indices) == len(answer.columns):
+        relevant_indices = [
+            index
+            for index, column in enumerate(answer.columns)
+            if _split_identifier_tokens(column) & question_tokens
+        ]
+        if not relevant_indices or len(relevant_indices) == len(answer.columns):
+            return answer
+        keep_indices = relevant_indices
+
+    return AnswerTable(
+        columns=[answer.columns[index] for index in keep_indices],
+        rows=[[row[index] for index in keep_indices] for row in answer.rows],
+    )
+
+
+def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
+    normalized = AnswerTable(
+        columns=[str(column).strip() for column in answer.columns],
+        rows=[[_normalize_answer_cell(cell) for cell in row] for row in answer.rows],
+    )
+    return _drop_obvious_helper_columns(task, normalized)
+
+
+def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None:
+    if payload.get("action") == "answer" and isinstance(payload.get("action_input"), dict):
+        payload = payload["action_input"]
+    columns = payload.get("columns")
+    rows = payload.get("rows")
+    if not isinstance(columns, list) or not columns or not all(isinstance(column, str) for column in columns):
+        return None
+    if not isinstance(rows, list):
+        return None
+    normalized_rows: list[list[object]] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) != len(columns):
+            return None
+        normalized_rows.append(list(row))
+    return AnswerTable(columns=list(columns), rows=normalized_rows)
 
 
 def _find_final_marker_segment(text: str, max_chars: int) -> str | None:
@@ -397,7 +533,11 @@ class ReActAgent:
             )
         return messages
 
-    def _candidate_answer_from_observation(self, observation: dict[str, object]) -> AnswerTable | None:
+    def _candidate_answer_from_observation(
+        self,
+        task: PublicTask,
+        observation: dict[str, object],
+    ) -> AnswerTable | None:
         if observation.get("tool") != "execute_python":
             return None
         content = observation.get("content")
@@ -417,20 +557,24 @@ class ReActAgent:
         except ValueError:
             return None
 
-        if payload.get("action") == "answer" and isinstance(payload.get("action_input"), dict):
-            payload = payload["action_input"]
-        columns = payload.get("columns")
-        rows = payload.get("rows")
-        if not isinstance(columns, list) or not columns or not all(isinstance(column, str) for column in columns):
+        answer = _answer_table_from_payload(payload)
+        if answer is None:
             return None
-        if not isinstance(rows, list):
-            return None
-        normalized_rows: list[list[object]] = []
-        for row in rows:
-            if not isinstance(row, list) or len(row) != len(columns):
-                return None
-            normalized_rows.append(list(row))
-        return AnswerTable(columns=list(columns), rows=normalized_rows)
+        return _sanitize_answer_table(task, answer)
+
+    def _sanitize_model_step(self, task: PublicTask, model_step: ModelStep) -> ModelStep:
+        if model_step.action != "answer":
+            return model_step
+        answer = _answer_table_from_payload(model_step.action_input)
+        if answer is None:
+            return model_step
+        sanitized = _sanitize_answer_table(task, answer)
+        return ModelStep(
+            thought=model_step.thought,
+            action=model_step.action,
+            action_input=sanitized.to_dict(),
+            raw_response=model_step.raw_response,
+        )
 
     def run(self, task: PublicTask) -> AgentRunResult:
         state = AgentRuntimeState()
@@ -457,6 +601,7 @@ class ReActAgent:
                 break
             try:
                 model_step = parse_model_step(raw_response)
+                model_step = self._sanitize_model_step(task, model_step)
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 observation = {
                     "ok": tool_result.ok,
@@ -473,11 +618,22 @@ class ReActAgent:
                     ok=tool_result.ok,
                 )
                 state.steps.append(step_record)
-                candidate_answer = self._candidate_answer_from_observation(observation)
+                candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
                     fallback_answer = candidate_answer
+                    if (
+                        self.system_prompt == CODEACT_REACT_SYSTEM_PROMPT
+                        and model_step.action == "execute_python"
+                        and tool_result.ok
+                    ):
+                        state.answer = candidate_answer
+                        break
                 if tool_result.is_terminal:
-                    state.answer = tool_result.answer
+                    state.answer = (
+                        _sanitize_answer_table(task, tool_result.answer)
+                        if tool_result.answer is not None
+                        else None
+                    )
                     break
             except Exception as exc:
                 observation = {
