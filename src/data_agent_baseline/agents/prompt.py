@@ -39,6 +39,7 @@ Operational rules:
 10. Before finalizing, verify all filters, joins, distinct entity counts, units, and whether min/max/top answers have ties.
 11. If the question asks to list/all/which rows, include every matching row, not only the first one.
 12. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
+13. If the runtime asks for semantic schema validation, do not run code; return only `SchemaDecision`.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -53,7 +54,12 @@ Format rules:
    ```json
    {"columns":["requested_column"],"rows":[["value"]]}
    ```
-3. The only tools shown in CodeAct mode are `execute_python` and `answer`.
+3. For runtime schema validation, use:
+   SchemaDecision:
+   ```json
+   {"decision":"select_columns","columns":["requested_column"],"reason":"only this column is requested"}
+   ```
+4. The only tools shown in CodeAct mode are `execute_python` and `answer`.
 """.strip()
 
 RESPONSE_EXAMPLES = """
@@ -101,6 +107,12 @@ Answer:
 ```json
 {"columns":["category","total_revenue"],"rows":[["Electronics","4200000.00"],["Clothing","1850000.00"]]}
 ```
+
+Example response when the runtime asks for semantic schema validation:
+SchemaDecision:
+```json
+{"decision":"accept","reason":"both columns are required by the question"}
+```
 """.strip()
 
 
@@ -117,6 +129,7 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "For lowest/highest/min/max/top questions, verify ties and include all tied rows. "
             "For count questions, verify whether the counted entity should be distinct. "
             "For average monthly/yearly questions, verify unit conversion before finalizing. "
+            "If asked for semantic schema validation, answer with `SchemaDecision:` only. "
             "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
         )
     else:

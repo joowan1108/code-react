@@ -36,6 +36,22 @@ class CandidateAnswerDecision:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PendingCandidate:
+    answer: AnswerTable
+    reasons: tuple[str, ...]
+    source_step_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaDecision:
+    decision: str
+    columns: tuple[str, ...]
+    reason: str = ""
+
+
+SCHEMA_DECISION_ACTION = "__schema_decision__"
+
 FINAL_RESULT_MARKERS = (
     "FINAL_TABLE_JSON:",
     "FINAL_RESULT:",
@@ -89,7 +105,7 @@ def _parse_json_model_step(raw_response: str) -> ModelStep:
 
 
 def _extract_labeled_text(raw_response: str, label: str) -> str | None:
-    stop_labels = "Thought|Reflexion|Action|Code|Output|Answer|Final Answer|Observation"
+    stop_labels = "Thought|Reflexion|Action|Code|Output|Answer|Final Answer|SchemaDecision|Observation"
     pattern = rf"(?:^|\n)\s*{label}\s*:\s*(.*?)(?=\n\s*(?:{stop_labels})\s*:|\Z)"
     match = re.search(pattern, raw_response, flags=re.IGNORECASE | re.DOTALL)
     if match is None:
@@ -145,6 +161,42 @@ def _extract_answer_step(raw_response: str) -> ModelStep | None:
     )
 
 
+def _extract_schema_decision_step(raw_response: str) -> ModelStep | None:
+    schema_text = _extract_labeled_text(raw_response, "SchemaDecision")
+    if schema_text is None:
+        try:
+            payload = _load_single_json_object(_strip_json_fence(raw_response))
+        except Exception:
+            return None
+        if "decision" not in payload:
+            return None
+    else:
+        payload = _load_first_json_object(schema_text)
+
+    decision = payload.get("decision")
+    if not isinstance(decision, str) or not decision.strip():
+        raise ValueError("SchemaDecision must include a non-empty decision string.")
+    columns = payload.get("columns", [])
+    if columns is None:
+        columns = []
+    if not isinstance(columns, list) or not all(isinstance(column, str) for column in columns):
+        raise ValueError("SchemaDecision columns must be a list of strings.")
+    reason = payload.get("reason", "")
+    if not isinstance(reason, str):
+        reason = str(reason)
+
+    return ModelStep(
+        thought=_extract_thought(raw_response),
+        action=SCHEMA_DECISION_ACTION,
+        action_input={
+            "decision": decision.strip().lower(),
+            "columns": columns,
+            "reason": reason,
+        },
+        raw_response=raw_response,
+    )
+
+
 def _extract_code_block(raw_response: str) -> str | None:
     code_after_label = re.search(
         r"(?:^|\n)\s*Code\s*:\s*```(?:python|py)?\s*(.*?)\s*```",
@@ -183,6 +235,10 @@ def _parse_codeact_model_step(raw_response: str) -> ModelStep:
     if answer_step is not None:
         return answer_step
 
+    schema_decision_step = _extract_schema_decision_step(raw_response)
+    if schema_decision_step is not None:
+        return schema_decision_step
+
     raise ValueError("Model response is neither a JSON action nor a CodeAct code/answer block.")
 
 
@@ -217,38 +273,6 @@ def _split_identifier_tokens(text: str) -> set[str]:
         if len(token) > 3 and token.endswith("s"):
             expanded.add(token[:-1])
     return expanded
-
-
-def _question_schema_tokens(question: str) -> set[str]:
-    tokens = _split_identifier_tokens(question)
-    aliases: set[str] = set()
-    if tokens & {"who", "whose"}:
-        aliases.update({"user", "person", "people", "name", "author", "customer", "player", "owner"})
-    if tokens & {"when"}:
-        aliases.update({"date", "time", "year", "month", "day", "created", "creation"})
-    if tokens & {"where"}:
-        aliases.update({"location", "place", "country", "city", "state", "region"})
-    if tokens & {"how", "many", "count", "number"}:
-        aliases.update({"count", "number", "total", "n", "frequency"})
-    if tokens & {"average", "avg", "mean"}:
-        aliases.update({"average", "avg", "mean"})
-    if tokens & {"sum", "total"}:
-        aliases.update({"sum", "total"})
-    if tokens & {"percentage", "percent"}:
-        aliases.update({"percentage", "percent", "ratio", "rate", "share"})
-    if tokens & {"ratio", "rate", "proportion"}:
-        aliases.update({"ratio", "rate", "proportion", "percentage", "percent"})
-    if tokens & {"comment", "comments", "post", "posts", "text"}:
-        aliases.update({"comment", "comments", "post", "posts", "text", "body", "content", "title"})
-    if tokens & {"amount", "revenue", "price", "cost", "sales"}:
-        aliases.update({"amount", "revenue", "price", "cost", "sale", "sales", "value"})
-    if tokens & {"disease", "diagnosed", "diagnosis"}:
-        aliases.update({"disease", "diagnosed", "diagnosis"})
-    if tokens & {"telephone", "phone"}:
-        aliases.update({"telephone", "phone", "number"})
-    if tokens & {"funding"}:
-        aliases.update({"funding", "type"})
-    return tokens | aliases
 
 
 def _question_is_single_value(question: str) -> bool:
@@ -374,105 +398,71 @@ def _normalize_answer_cell(value: object) -> object:
     return text
 
 
-def _drop_obvious_helper_columns(task: PublicTask, answer: AnswerTable) -> AnswerTable:
-    if len(answer.columns) < 2:
-        return answer
-
-    q = task.question.lower()
-    if "comment" in q and any(phrase in q for phrase in ("what is", "what's", "which")):
-        preferred_indices = [
-            index
-            for index, column in enumerate(answer.columns)
-            if _split_identifier_tokens(column) & {"text", "comment", "body", "content"}
-        ]
-        if preferred_indices:
-            return AnswerTable(
-                columns=[answer.columns[index] for index in preferred_indices],
-                rows=[[row[index] for index in preferred_indices] for row in answer.rows],
-            )
-
-    if _question_is_single_value(task.question):
-        metric_tokens = {
-            "count",
-            "number",
-            "total",
-            "sum",
-            "average",
-            "avg",
-            "mean",
-            "percentage",
-            "percent",
-            "ratio",
-            "rate",
-            "share",
-            "value",
-            "consumption",
-        }
-        preferred_indices = [
-            index
-            for index, column in enumerate(answer.columns)
-            if _split_identifier_tokens(column) & metric_tokens
-        ]
-        if preferred_indices and len(preferred_indices) < len(answer.columns):
-            return AnswerTable(
-                columns=[answer.columns[index] for index in preferred_indices],
-                rows=[[row[index] for index in preferred_indices] for row in answer.rows],
-            )
-
-    question_tokens = _question_schema_tokens(task.question)
-    helper_tokens = {
-        "id",
-        "index",
-        "idx",
-        "row",
-        "rank",
-        "type",
-        "operation",
-        "date",
-        "time",
-        "year",
-        "month",
-        "day",
-        "score",
-        "post",
-        "user",
-        "created",
-        "creation",
-        "updated",
-        "modified",
-    }
-    keep_indices: list[int] = []
-    for index, column in enumerate(answer.columns):
-        column_tokens = _split_identifier_tokens(column)
-        joined_column = re.sub(r"[^a-z0-9]+", "", column.lower())
-        joined_requested = len(joined_column) >= 3 and joined_column in task.question.lower().replace(" ", "")
-        directly_requested = bool(column_tokens & question_tokens) or joined_requested
-        obvious_helper = bool(column_tokens & helper_tokens) and not directly_requested
-        if directly_requested or not obvious_helper:
-            keep_indices.append(index)
-
-    if not keep_indices or len(keep_indices) == len(answer.columns):
-        relevant_indices = [
-            index
-            for index, column in enumerate(answer.columns)
-            if _split_identifier_tokens(column) & question_tokens
-        ]
-        if not relevant_indices or len(relevant_indices) == len(answer.columns):
-            return answer
-        keep_indices = relevant_indices
-
+def _normalize_answer_table(answer: AnswerTable) -> AnswerTable:
     return AnswerTable(
-        columns=[answer.columns[index] for index in keep_indices],
-        rows=[[row[index] for index in keep_indices] for row in answer.rows],
+        columns=[str(column).strip() for column in answer.columns],
+        rows=[[_normalize_answer_cell(cell) for cell in row] for row in answer.rows],
     )
 
 
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
-    normalized = AnswerTable(
-        columns=[str(column).strip() for column in answer.columns],
-        rows=[[_normalize_answer_cell(cell) for cell in row] for row in answer.rows],
+    _ = task
+    return _normalize_answer_table(answer)
+
+
+def _answer_needs_schema_validation(task: PublicTask, answer: AnswerTable) -> bool:
+    _ = task
+    return len(answer.columns) > 1
+
+
+def _project_answer_table(answer: AnswerTable, columns: tuple[str, ...]) -> AnswerTable:
+    index_by_column = {column: index for index, column in enumerate(answer.columns)}
+    indices = [index_by_column[column] for column in columns]
+    return AnswerTable(
+        columns=list(columns),
+        rows=[[row[index] for index in indices] for row in answer.rows],
     )
-    return _drop_obvious_helper_columns(task, normalized)
+
+
+def _parse_schema_decision_payload(
+    action_input: dict[str, object],
+    pending_candidate: PendingCandidate,
+) -> SchemaDecision:
+    decision = action_input.get("decision")
+    if not isinstance(decision, str):
+        raise ValueError("SchemaDecision decision must be a string.")
+    normalized_decision = decision.strip().lower()
+    if normalized_decision not in {"accept", "select_columns", "reject"}:
+        raise ValueError("SchemaDecision decision must be accept, select_columns, or reject.")
+
+    reason = action_input.get("reason", "")
+    if not isinstance(reason, str):
+        reason = str(reason)
+
+    if normalized_decision == "accept":
+        return SchemaDecision(
+            decision=normalized_decision,
+            columns=tuple(pending_candidate.answer.columns),
+            reason=reason,
+        )
+
+    if normalized_decision == "reject":
+        return SchemaDecision(decision=normalized_decision, columns=(), reason=reason)
+
+    columns = action_input.get("columns")
+    if not isinstance(columns, list) or not columns or not all(isinstance(column, str) for column in columns):
+        raise ValueError("select_columns SchemaDecision must include a non-empty columns list.")
+
+    available_columns = set(pending_candidate.answer.columns)
+    unknown_columns = [column for column in columns if column not in available_columns]
+    if unknown_columns:
+        raise ValueError(f"SchemaDecision selected unknown columns: {unknown_columns}")
+
+    return SchemaDecision(
+        decision=normalized_decision,
+        columns=tuple(columns),
+        reason=reason,
+    )
 
 
 def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None:
@@ -520,6 +510,9 @@ def _candidate_decision_from_observation(
 
     if _question_is_single_value(task.question) and (len(answer.rows) != 1 or len(answer.columns) != 1):
         reasons.append("single_value_question_requires_one_cell_answer")
+
+    if _answer_needs_schema_validation(task, answer):
+        reasons.append("schema_validation_required")
 
     if (
         _question_requires_tie_check(task.question)
@@ -756,13 +749,43 @@ class ReActAgent:
     def _build_runtime_instruction(
         self,
         *,
+        task: PublicTask,
         step_index: int,
         state: AgentRuntimeState,
         fallback_answer: AnswerTable | None,
+        pending_candidate: PendingCandidate | None,
         consecutive_parse_errors: int,
     ) -> str | None:
         if self.system_prompt != CODEACT_REACT_SYSTEM_PROMPT:
             return None
+
+        if pending_candidate is not None:
+            return (
+                "Semantic schema validation required. Do not run Python and do not recompute the answer.\n"
+                f"Question: {task.question}\n"
+                f"Candidate answer preview: {_safe_json_dumps(_answer_preview(pending_candidate.answer, max_rows=5))}\n"
+                f"Runtime concerns: {', '.join(pending_candidate.reasons)}\n\n"
+                "Choose columns by semantic meaning, using the question and the sample values. "
+                "Keep columns that are directly needed to answer the question; remove helper columns such as ids, dates, ranks, "
+                "scores, or costs only when they are not part of the requested answer. "
+                "If multiple columns are semantically requested, keep all of them. "
+                "If the candidate row set or calculation looks wrong, reject it.\n\n"
+                "Return exactly one schema decision in this format:\n"
+                "SchemaDecision:\n"
+                "```json\n"
+                "{\"decision\":\"accept\",\"reason\":\"columns answer the question\"}\n"
+                "```\n"
+                "or\n"
+                "SchemaDecision:\n"
+                "```json\n"
+                "{\"decision\":\"select_columns\",\"columns\":[\"column_name\"],\"reason\":\"only this column is requested\"}\n"
+                "```\n"
+                "or\n"
+                "SchemaDecision:\n"
+                "```json\n"
+                "{\"decision\":\"reject\",\"reason\":\"candidate does not answer the question\"}\n"
+                "```"
+            )
 
         remaining_steps = self.config.max_steps - step_index + 1
         instructions: list[str] = []
@@ -838,6 +861,7 @@ class ReActAgent:
     def run(self, task: PublicTask) -> AgentRunResult:
         state = AgentRuntimeState()
         fallback_answer: AnswerTable | None = None
+        pending_candidate: PendingCandidate | None = None
         consecutive_parse_errors = 0
         for step_index in range(1, self.config.max_steps + 1):
             try:
@@ -846,9 +870,11 @@ class ReActAgent:
                         task,
                         state,
                         runtime_instruction=self._build_runtime_instruction(
+                            task=task,
                             step_index=step_index,
                             state=state,
                             fallback_answer=fallback_answer,
+                            pending_candidate=pending_candidate,
                             consecutive_parse_errors=consecutive_parse_errors,
                         ),
                     )
@@ -899,8 +925,150 @@ class ReActAgent:
                 continue
 
             consecutive_parse_errors = 0
+            if pending_candidate is not None:
+                if model_step.action != SCHEMA_DECISION_ACTION:
+                    observation = {
+                        "ok": False,
+                        "error": (
+                            "A schema decision is required before continuing. "
+                            "Return `SchemaDecision:` with accept, select_columns, or reject."
+                        ),
+                        "candidate_preview": _answer_preview(pending_candidate.answer, max_rows=5),
+                    }
+                    state.steps.append(
+                        StepRecord(
+                            step_index=step_index,
+                            thought=model_step.thought,
+                            action="__error__",
+                            action_input={},
+                            raw_response=raw_response,
+                            observation=observation,
+                            ok=False,
+                        )
+                    )
+                    continue
+
+                try:
+                    schema_decision = _parse_schema_decision_payload(
+                        model_step.action_input,
+                        pending_candidate,
+                    )
+                    if schema_decision.decision == "reject":
+                        observation = {
+                            "ok": True,
+                            "tool": SCHEMA_DECISION_ACTION,
+                            "content": {
+                                "decision": schema_decision.decision,
+                                "reason": schema_decision.reason,
+                                "next_action": (
+                                    "Candidate rejected by semantic schema validation. "
+                                    "Recompute or print a corrected FINAL_TABLE_JSON."
+                                ),
+                            },
+                        }
+                        state.steps.append(
+                            StepRecord(
+                                step_index=step_index,
+                                thought=model_step.thought,
+                                action=model_step.action,
+                                action_input=model_step.action_input,
+                                raw_response=raw_response,
+                                observation=observation,
+                                ok=True,
+                            )
+                        )
+                        pending_candidate = None
+                        fallback_answer = None
+                        continue
+
+                    state.answer = _project_answer_table(
+                        pending_candidate.answer,
+                        schema_decision.columns,
+                    )
+                    observation = {
+                        "ok": True,
+                        "tool": SCHEMA_DECISION_ACTION,
+                        "content": {
+                            "decision": schema_decision.decision,
+                            "selected_columns": list(schema_decision.columns),
+                            "reason": schema_decision.reason,
+                            "final_preview": _answer_preview(state.answer, max_rows=5),
+                        },
+                    }
+                    state.steps.append(
+                        StepRecord(
+                            step_index=step_index,
+                            thought=model_step.thought,
+                            action=model_step.action,
+                            action_input=model_step.action_input,
+                            raw_response=raw_response,
+                            observation=observation,
+                            ok=True,
+                        )
+                    )
+                    break
+                except Exception as exc:
+                    observation = {
+                        "ok": False,
+                        "error": str(exc),
+                        "recovery_instruction": (
+                            "Return a valid SchemaDecision using only candidate column names."
+                        ),
+                        "candidate_preview": _answer_preview(pending_candidate.answer, max_rows=5),
+                    }
+                    state.steps.append(
+                        StepRecord(
+                            step_index=step_index,
+                            thought=model_step.thought,
+                            action="__error__",
+                            action_input=model_step.action_input,
+                            raw_response=raw_response,
+                            observation=observation,
+                            ok=False,
+                        )
+                    )
+                    continue
+
             try:
                 model_step = self._sanitize_model_step(task, model_step)
+                if (
+                    self.system_prompt == CODEACT_REACT_SYSTEM_PROMPT
+                    and model_step.action == "answer"
+                ):
+                    answer = _answer_table_from_payload(model_step.action_input)
+                    if answer is not None:
+                        answer = _normalize_answer_table(answer)
+                        if _answer_needs_schema_validation(task, answer):
+                            pending_candidate = PendingCandidate(
+                                answer=answer,
+                                reasons=("schema_validation_required",),
+                                source_step_index=step_index,
+                            )
+                            fallback_answer = answer
+                            observation = {
+                                "ok": True,
+                                "tool": "runtime_schema_review",
+                                "content": {
+                                    "candidate_preview": _answer_preview(answer, max_rows=5),
+                                    "next_action": (
+                                        "Return SchemaDecision next. Accept this schema, select only "
+                                        "semantically requested columns, or reject the candidate."
+                                    ),
+                                },
+                            }
+                            state.steps.append(
+                                StepRecord(
+                                    step_index=step_index,
+                                    thought=model_step.thought,
+                                    action="__schema_review__",
+                                    action_input=answer.to_dict(),
+                                    raw_response=raw_response,
+                                    observation=observation,
+                                    ok=True,
+                                )
+                            )
+                            continue
+
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 content = dict(tool_result.content)
                 observation = {
@@ -921,6 +1089,11 @@ class ReActAgent:
                 candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
                     decision = _candidate_decision_from_observation(task, observation, candidate_answer)
+                    requires_schema_validation = (
+                        "schema_validation_required" in decision.reasons
+                        and "python_traceback_present" not in decision.reasons
+                        and bool(decision.answer.rows)
+                    )
                     content["final_table_json_decision"] = {
                         "auto_submit": decision.auto_submit,
                         "store_as_fallback": decision.store_as_fallback,
@@ -930,13 +1103,25 @@ class ReActAgent:
                             "Runtime accepted this FINAL_TABLE_JSON as the final answer."
                             if decision.auto_submit
                             else (
-                                "Runtime did not auto-submit this candidate. Fix the listed issues, "
-                                "verify all filters/ties/schema, then print a corrected FINAL_TABLE_JSON or submit Answer."
+                                "Runtime requires semantic schema validation next. Return SchemaDecision "
+                                "to accept, select requested columns, or reject this candidate."
+                                if requires_schema_validation
+                                else (
+                                    "Runtime did not auto-submit this candidate. Fix the listed issues, "
+                                    "verify all filters/ties/schema, then print a corrected FINAL_TABLE_JSON or submit Answer."
+                                )
                             )
                         ),
                     }
                     if decision.store_as_fallback:
                         fallback_answer = decision.answer
+                    if requires_schema_validation:
+                        pending_candidate = PendingCandidate(
+                            answer=decision.answer,
+                            reasons=decision.reasons,
+                            source_step_index=step_index,
+                        )
+                        continue
                     if (
                         decision.auto_submit
                         and
