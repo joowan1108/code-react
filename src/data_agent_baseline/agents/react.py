@@ -543,13 +543,22 @@ def _expanded_question_tokens(question: str) -> set[str]:
     expansions = {
         "diagnosis": {"disease", "diagnosed"},
         "sex": {"gender"},
+        "gender": {"sex"},
+        "reference": {"ref"},
+        "ref": {"reference"},
         "url": {"website", "webpage", "site"},
         "text": {"comment", "answer", "body"},
         "comment": {"text", "body"},
-        "trans": {"transaction", "transactions", "withdrawal", "withdrawals"},
-        "transaction": {"trans", "withdrawal", "withdrawals"},
-        "consumption": {"consume"},
-        "constructor": {"constructorref", "constructorRef"},
+        "trans": {"transaction", "transactions"},
+        "transaction": {"trans", "transactions"},
+        "user": {"poster", "displayname", "display", "name"},
+        "poster": {"user", "displayname", "display", "name"},
+        "view": {"views", "viewcount"},
+        "views": {"view", "viewcount"},
+        "vote": {"votes", "upvote", "upvotes"},
+        "votes": {"vote", "upvote", "upvotes"},
+        "colour": {"color"},
+        "color": {"colour"},
     }
     for canonical, aliases in expansions.items():
         if canonical in tokens or tokens & {alias.lower() for alias in aliases}:
@@ -559,34 +568,68 @@ def _expanded_question_tokens(question: str) -> set[str]:
         tokens.add("url")
     if "disease" in tokens or "diagnosed" in tokens:
         tokens.add("diagnosis")
+    if {"up", "vote"} <= tokens or {"up", "votes"} <= tokens:
+        tokens.update({"upvote", "upvotes"})
+    if {"full", "name"} <= tokens:
+        tokens.update({"first", "last", "firstname", "lastname"})
     if "ranked" in tokens:
         tokens.add("rank")
     return tokens
 
 
-def _column_relevance_score(question: str, column: str) -> int:
+def _question_requests_multiple_outputs(question: str) -> bool:
+    q = f" {question.lower()} "
+    multi_phrases = (
+        " as well as ",
+        " along with ",
+        " include ",
+        " including ",
+        " give their ",
+        " give its ",
+        " give the ",
+        " provide their ",
+        " provide its ",
+        " name the user",
+        " name of the user",
+        " name and ",
+        " full name and ",
+        " first name and last name",
+    )
+    if any(phrase in q for phrase in multi_phrases):
+        return True
+    if re.search(
+        r"\b(?:and|,)\s+(?:the\s+)?"
+        r"(?:average|avg|mean|total|sum|cost|age|user|poster|name|website|url|view|views|"
+        r"score|id|disease|sex|gender|type|count)\b",
+        q,
+    ):
+        return True
+    return False
+
+
+def _question_selects_entity_by_measure(question: str) -> bool:
     q = question.lower()
+    selector_phrases = ("which ", "identify", "name ", "what is the")
+    return _question_requires_tie_check(question) and any(phrase in q for phrase in selector_phrases)
+
+
+def _column_relevance_score(question: str, column: str) -> int:
     question_tokens = _expanded_question_tokens(question)
     column_tokens = _column_tokens(column)
     score = sum(2 for token in column_tokens if token in question_tokens)
-    normalized_column = re.sub(r"[^a-z0-9]", "", column.lower())
 
-    if "event" in question_tokens and "event" in column_tokens and "name" in column_tokens:
-        score += 4
-    if {"constructor", "reference"} <= question_tokens and normalized_column in {"constructorref", "constructorreference"}:
-        score += 5
+    if "name" in question_tokens and "name" in column_tokens:
+        score += 2
+    if {"reference", "ref"} & question_tokens and {"reference", "ref"} & column_tokens:
+        score += 2
     if ("website" in question_tokens or "url" in question_tokens) and ("url" in column_tokens or "website" in column_tokens):
         score += 6
-    if "funding" in question_tokens and "funding" in column_tokens:
-        score += 4
     if "comment" in question_tokens and ("text" in column_tokens or "body" in column_tokens):
         score += 5
-    if "finish" in question_tokens and "time" in column_tokens:
-        score += 5
-    if "consumption" in question_tokens and "consumption" in column_tokens:
-        score += 5
-    if {"transaction", "withdrawal"} & question_tokens and normalized_column in {"transid", "transactionid"}:
-        score += 5
+    if {"full", "name"} <= question_tokens and column_tokens & {"full", "first", "last", "name", "member"}:
+        score += 3
+    if "id" in question_tokens and "id" in column_tokens:
+        score += 1
 
     measure_tokens = {
         "cost",
@@ -600,11 +643,24 @@ def _column_relevance_score(question: str, column: str) -> int:
         "customer",
         "milliseconds",
     }
-    entity_selector = any(phrase in q for phrase in ("which ", "what is the", "what's the", "identify", "name "))
-    if entity_selector and column_tokens & measure_tokens and not column_tokens & {"name", "url", "text", "type"}:
-        score -= 3
+    if (
+        _question_selects_entity_by_measure(question)
+        and column_tokens & measure_tokens
+        and not column_tokens & {"name", "url", "text", "type"}
+    ):
+        score -= 4
 
     return score
+
+
+def _requested_column_indices(question: str, scores: list[int]) -> list[int]:
+    _ = question
+    return [index for index, score in enumerate(scores) if score >= 2]
+
+
+def _project_indices(answer: AnswerTable, selected_indices: list[int]) -> AnswerTable:
+    selected_columns = tuple(answer.columns[index] for index in selected_indices)
+    return _project_answer_table(answer, selected_columns)
 
 
 def _soft_project_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
@@ -616,29 +672,27 @@ def _soft_project_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerT
     if best_score < 2:
         return answer
 
-    selected_indices = [index for index, score in enumerate(scores) if score == best_score]
-
     question_tokens = _expanded_question_tokens(task.question)
-    if {"website", "url"} & question_tokens:
+    requested_indices = _requested_column_indices(task.question, scores)
+    selected_indices: list[int] = []
+
+    if _question_requests_multiple_outputs(task.question):
+        omitted_scores = [score for index, score in enumerate(scores) if index not in requested_indices]
+        if len(requested_indices) >= 2 and all(score <= 0 for score in omitted_scores):
+            selected_indices = requested_indices
+    elif {"comment", "text"} & question_tokens:
         selected_indices = [
-            index
-            for index, column in enumerate(answer.columns)
-            if _column_relevance_score(task.question, column) >= 2
+            index for index, column in enumerate(answer.columns) if _column_tokens(column) & {"text", "body", "comment"}
         ]
-    elif any(word in task.question.lower() for word in (" and ", " as well as ", " along with ")):
-        selected_indices = [
-            index
-            for index, column in enumerate(answer.columns)
-            if _column_relevance_score(task.question, column) >= 2
-        ]
+    elif _question_selects_entity_by_measure(task.question):
+        selected_indices = requested_indices
     elif _question_is_single_value(task.question):
         selected_indices = [scores.index(best_score)]
 
     if not selected_indices or len(selected_indices) == len(answer.columns):
         return answer
 
-    selected_columns = tuple(answer.columns[index] for index in selected_indices)
-    return _project_answer_table(answer, selected_columns)
+    return _project_indices(answer, selected_indices)
 
 
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
