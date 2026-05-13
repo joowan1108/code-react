@@ -28,6 +28,14 @@ class ReActAgentConfig:
     final_marker_chars: int = 4000
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateAnswerDecision:
+    answer: AnswerTable
+    auto_submit: bool
+    store_as_fallback: bool
+    reasons: tuple[str, ...]
+
+
 FINAL_RESULT_MARKERS = (
     "FINAL_TABLE_JSON:",
     "FINAL_RESULT:",
@@ -234,7 +242,113 @@ def _question_schema_tokens(question: str) -> set[str]:
         aliases.update({"comment", "comments", "post", "posts", "text", "body", "content", "title"})
     if tokens & {"amount", "revenue", "price", "cost", "sales"}:
         aliases.update({"amount", "revenue", "price", "cost", "sale", "sales", "value"})
+    if tokens & {"disease", "diagnosed", "diagnosis"}:
+        aliases.update({"disease", "diagnosed", "diagnosis"})
+    if tokens & {"telephone", "phone"}:
+        aliases.update({"telephone", "phone", "number"})
+    if tokens & {"funding"}:
+        aliases.update({"funding", "type"})
     return tokens | aliases
+
+
+def _question_is_single_value(question: str) -> bool:
+    q = question.lower()
+    tokens = _split_identifier_tokens(question)
+    if any(phrase in q for phrase in ("how many", "how much", "what percentage", "calculate the percentage")):
+        return True
+    if any(
+        phrase in q
+        for phrase in (
+            "list",
+            "identify",
+            "name the",
+            "names and",
+            "what are",
+            "which ",
+            "give their",
+            "type of",
+        )
+    ):
+        return False
+    return bool(
+        tokens
+        & {
+            "count",
+            "average",
+            "avg",
+            "mean",
+            "percentage",
+            "percent",
+            "ratio",
+            "proportion",
+            "total",
+            "sum",
+        }
+    ) and "list" not in tokens
+
+
+def _question_expects_nonempty_rows(question: str) -> bool:
+    q = question.lower()
+    if _question_is_single_value(question):
+        return False
+    return any(
+        phrase in q
+        for phrase in (
+            "list",
+            "list all",
+            "which ",
+            "what are",
+            "what is the",
+            "what's the",
+            "state ",
+            "identify",
+            "name ",
+            "give ",
+        )
+    )
+
+
+def _question_requires_tie_check(question: str) -> bool:
+    tokens = _split_identifier_tokens(question)
+    return bool(
+        tokens
+        & {
+            "lowest",
+            "highest",
+            "minimum",
+            "maximum",
+            "min",
+            "max",
+            "least",
+            "most",
+            "best",
+            "worst",
+            "top",
+            "smallest",
+            "largest",
+            "fewest",
+        }
+    )
+
+
+def _stdout_mentions_tie_check(stdout: str) -> bool:
+    lowered = stdout.lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "tie",
+            "ties",
+            "all rows",
+            "all matching",
+            "all matches",
+            "same minimum",
+            "same maximum",
+            "same lowest",
+            "same highest",
+            "including tied",
+            "including ties",
+        )
+    )
 
 
 def _normalize_answer_cell(value: object) -> object:
@@ -264,6 +378,47 @@ def _drop_obvious_helper_columns(task: PublicTask, answer: AnswerTable) -> Answe
     if len(answer.columns) < 2:
         return answer
 
+    q = task.question.lower()
+    if "comment" in q and any(phrase in q for phrase in ("what is", "what's", "which")):
+        preferred_indices = [
+            index
+            for index, column in enumerate(answer.columns)
+            if _split_identifier_tokens(column) & {"text", "comment", "body", "content"}
+        ]
+        if preferred_indices:
+            return AnswerTable(
+                columns=[answer.columns[index] for index in preferred_indices],
+                rows=[[row[index] for index in preferred_indices] for row in answer.rows],
+            )
+
+    if _question_is_single_value(task.question):
+        metric_tokens = {
+            "count",
+            "number",
+            "total",
+            "sum",
+            "average",
+            "avg",
+            "mean",
+            "percentage",
+            "percent",
+            "ratio",
+            "rate",
+            "share",
+            "value",
+            "consumption",
+        }
+        preferred_indices = [
+            index
+            for index, column in enumerate(answer.columns)
+            if _split_identifier_tokens(column) & metric_tokens
+        ]
+        if preferred_indices and len(preferred_indices) < len(answer.columns):
+            return AnswerTable(
+                columns=[answer.columns[index] for index in preferred_indices],
+                rows=[[row[index] for index in preferred_indices] for row in answer.rows],
+            )
+
     question_tokens = _question_schema_tokens(task.question)
     helper_tokens = {
         "id",
@@ -278,6 +433,9 @@ def _drop_obvious_helper_columns(task: PublicTask, answer: AnswerTable) -> Answe
         "year",
         "month",
         "day",
+        "score",
+        "post",
+        "user",
         "created",
         "creation",
         "updated",
@@ -332,6 +490,54 @@ def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None
             return None
         normalized_rows.append(list(row))
     return AnswerTable(columns=list(columns), rows=normalized_rows)
+
+
+def _answer_preview(answer: AnswerTable, *, max_rows: int = 3) -> dict[str, object]:
+    return {
+        "columns": list(answer.columns),
+        "row_count": len(answer.rows),
+        "sample_rows": [list(row) for row in answer.rows[:max_rows]],
+    }
+
+
+def _candidate_decision_from_observation(
+    task: PublicTask,
+    observation: dict[str, object],
+    answer: AnswerTable,
+) -> CandidateAnswerDecision:
+    reasons: list[str] = []
+    content = observation.get("content")
+    content_dict = content if isinstance(content, dict) else {}
+    stdout = str(content_dict.get("output") or content_dict.get("stdout") or "")
+    stderr = str(content_dict.get("stderr") or "")
+    traceback_text = str(content_dict.get("traceback") or "")
+
+    if traceback_text or "traceback" in stderr.lower():
+        reasons.append("python_traceback_present")
+
+    if _question_expects_nonempty_rows(task.question) and not answer.rows:
+        reasons.append("question_expects_rows_but_candidate_is_empty")
+
+    if _question_is_single_value(task.question) and (len(answer.rows) != 1 or len(answer.columns) != 1):
+        reasons.append("single_value_question_requires_one_cell_answer")
+
+    if (
+        _question_requires_tie_check(task.question)
+        and len(answer.rows) <= 1
+        and not _stdout_mentions_tie_check(stdout)
+    ):
+        reasons.append("min_max_or_top_question_needs_explicit_tie_check")
+
+    if len(answer.columns) > 3 and not _question_is_single_value(task.question):
+        reasons.append("candidate_has_many_columns_verify_exact_schema")
+
+    store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
+    return CandidateAnswerDecision(
+        answer=answer,
+        auto_submit=not reasons,
+        store_as_fallback=store_as_fallback,
+        reasons=tuple(reasons),
+    )
 
 
 def _find_final_marker_segment(text: str, max_chars: int) -> str | None:
@@ -510,7 +716,13 @@ class ReActAgent:
         self.system_prompt = system_prompt or REACT_SYSTEM_PROMPT
         self.prompt_tool_names = prompt_tool_names
 
-    def _build_messages(self, task: PublicTask, state: AgentRuntimeState) -> list[ModelMessage]:
+    def _build_messages(
+        self,
+        task: PublicTask,
+        state: AgentRuntimeState,
+        *,
+        runtime_instruction: str | None = None,
+    ) -> list[ModelMessage]:
         is_codeact = self.system_prompt == CODEACT_REACT_SYSTEM_PROMPT
         system_content = build_system_prompt(
             self.tools.describe_for_prompt(self.prompt_tool_names),
@@ -522,7 +734,13 @@ class ReActAgent:
         if self.config.prompt_history_steps > 0:
             history_steps = history_steps[-self.config.prompt_history_steps :]
         for step in history_steps:
-            messages.append(ModelMessage(role="assistant", content=step.raw_response))
+            assistant_content = step.raw_response
+            if step.action == "__error__":
+                assistant_content = (
+                    "Invalid previous response omitted by runtime. "
+                    "Use the observation to correct the next step."
+                )
+            messages.append(ModelMessage(role="assistant", content=assistant_content))
             messages.append(
                 ModelMessage(
                     role="user",
@@ -531,7 +749,48 @@ class ReActAgent:
                     ),
                 )
             )
+        if runtime_instruction:
+            messages.append(ModelMessage(role="user", content=runtime_instruction))
         return messages
+
+    def _build_runtime_instruction(
+        self,
+        *,
+        step_index: int,
+        state: AgentRuntimeState,
+        fallback_answer: AnswerTable | None,
+        consecutive_parse_errors: int,
+    ) -> str | None:
+        if self.system_prompt != CODEACT_REACT_SYSTEM_PROMPT:
+            return None
+
+        remaining_steps = self.config.max_steps - step_index + 1
+        instructions: list[str] = []
+        if consecutive_parse_errors:
+            instructions.append(
+                "Runtime recovery: your previous response could not be parsed. "
+                "Do not repeat Thought-only text or <think> tags. Return exactly one valid step: "
+                "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
+            )
+        if remaining_steps <= 2:
+            instructions.append(
+                f"Finalization required: only {remaining_steps} step(s) remain. "
+                "Stop broad exploration. Prefer submitting the best exact answer now. "
+                "Use only the requested columns, include all tied/all matching rows, and check units such as monthly vs yearly."
+            )
+            if remaining_steps == 1:
+                instructions.append(
+                    "This is the last step. Do not perform another exploratory inspection. "
+                    "Submit `Answer` now unless a single short Python action can print `FINAL_TABLE_JSON` directly."
+                )
+        if fallback_answer is not None and remaining_steps <= 2:
+            instructions.append(
+                "A previous candidate answer is available as fallback. If it matches the question, submit it exactly:\n"
+                f"{_safe_json_dumps(_answer_preview(fallback_answer, max_rows=5))}"
+            )
+        if not instructions:
+            return None
+        return "\n\n".join(instructions)
 
     def _candidate_answer_from_observation(
         self,
@@ -579,9 +838,21 @@ class ReActAgent:
     def run(self, task: PublicTask) -> AgentRunResult:
         state = AgentRuntimeState()
         fallback_answer: AnswerTable | None = None
+        consecutive_parse_errors = 0
         for step_index in range(1, self.config.max_steps + 1):
             try:
-                raw_response = self.model.complete(self._build_messages(task, state))
+                raw_response = self.model.complete(
+                    self._build_messages(
+                        task,
+                        state,
+                        runtime_instruction=self._build_runtime_instruction(
+                            step_index=step_index,
+                            state=state,
+                            fallback_answer=fallback_answer,
+                            consecutive_parse_errors=consecutive_parse_errors,
+                        ),
+                    )
+                )
             except Exception as exc:  # noqa: BLE001
                 state.steps.append(
                     StepRecord(
@@ -601,12 +872,41 @@ class ReActAgent:
                 break
             try:
                 model_step = parse_model_step(raw_response)
+            except Exception as exc:
+                consecutive_parse_errors += 1
+                observation = {
+                    "ok": False,
+                    "error": str(exc),
+                    "recovery_instruction": (
+                        "Return exactly one valid CodeAct step next. Do not repeat invalid text. "
+                        "Use `Thought:` plus fenced `Code:` or `Thought:` plus `Answer:` fenced JSON."
+                    ),
+                }
+                state.steps.append(
+                    StepRecord(
+                        step_index=step_index,
+                        thought="",
+                        action="__error__",
+                        action_input={},
+                        raw_response=raw_response,
+                        observation=observation,
+                        ok=False,
+                    )
+                )
+                if consecutive_parse_errors >= 2 and fallback_answer is not None:
+                    state.answer = fallback_answer
+                    break
+                continue
+
+            consecutive_parse_errors = 0
+            try:
                 model_step = self._sanitize_model_step(task, model_step)
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
+                content = dict(tool_result.content)
                 observation = {
                     "ok": tool_result.ok,
                     "tool": model_step.action,
-                    "content": tool_result.content,
+                    "content": content,
                 }
                 step_record = StepRecord(
                     step_index=step_index,
@@ -620,13 +920,31 @@ class ReActAgent:
                 state.steps.append(step_record)
                 candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
-                    fallback_answer = candidate_answer
+                    decision = _candidate_decision_from_observation(task, observation, candidate_answer)
+                    content["final_table_json_decision"] = {
+                        "auto_submit": decision.auto_submit,
+                        "store_as_fallback": decision.store_as_fallback,
+                        "reasons": list(decision.reasons),
+                        "candidate_preview": _answer_preview(decision.answer),
+                        "next_action": (
+                            "Runtime accepted this FINAL_TABLE_JSON as the final answer."
+                            if decision.auto_submit
+                            else (
+                                "Runtime did not auto-submit this candidate. Fix the listed issues, "
+                                "verify all filters/ties/schema, then print a corrected FINAL_TABLE_JSON or submit Answer."
+                            )
+                        ),
+                    }
+                    if decision.store_as_fallback:
+                        fallback_answer = decision.answer
                     if (
+                        decision.auto_submit
+                        and
                         self.system_prompt == CODEACT_REACT_SYSTEM_PROMPT
                         and model_step.action == "execute_python"
                         and tool_result.ok
                     ):
-                        state.answer = candidate_answer
+                        state.answer = decision.answer
                         break
                 if tool_result.is_terminal:
                     state.answer = (
