@@ -94,6 +94,8 @@ Useful environment overrides:
 | `AGENT_MAX_WORKERS` | `4` | Parallel tasks. |
 | `AGENT_TASK_TIMEOUT_SECONDS` | `300` | Per-task wall-clock timeout. |
 | `AGENT_MAX_STEPS` | `10` | ReAct iterations per task. |
+| `AGENT_MODEL_TIMEOUT_SECONDS` | `90` | Timeout for each model request. |
+| `AGENT_MAX_OUTPUT_TOKENS` | `2048` | Maximum model output tokens; set `0` to omit the cap. |
 | `AGENT_PYTHON_TIMEOUT_SECONDS` | `45` | Timeout for each executed Python block. |
 | `AGENT_WRITE_FAILURE_STUB` | `1` | Write a valid zero-score CSV if a task fails. |
 | `MODEL_API_URL_APPEND_V1` | `auto` | Append `/v1` to `MODEL_API_URL` unless it already ends with `/v1`; set `0` to disable. |
@@ -145,6 +147,8 @@ agent:
   api_key: YOUR_API_KEY
   max_steps: 16
   temperature: 0.0
+  model_timeout_seconds: 90
+  max_output_tokens: 2048
   python_timeout_seconds: 45
 
 run:
@@ -165,6 +169,8 @@ Config fields:
 | `agent.api_key` | API key, read directly from the config file. |
 | `agent.max_steps` | Maximum agent iterations per task. |
 | `agent.temperature` | Sampling temperature. |
+| `agent.model_timeout_seconds` | Timeout for each model request. |
+| `agent.max_output_tokens` | Maximum model output tokens. Set to `0` or `null` to omit the cap. |
 | `run.output_dir` | Output directory for run artifacts. |
 | `run.run_id` | Optional run directory name. Defaults to a UTC timestamp if omitted. Must be a single directory name; existing run directories are rejected. |
 | `run.max_workers` | Parallel worker count for `run-benchmark`. |

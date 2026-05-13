@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -119,9 +120,12 @@ class ToolRegistry:
     specs: dict[str, ToolSpec]
     handlers: dict[str, ToolHandler]
 
-    def describe_for_prompt(self) -> str:
+    def describe_for_prompt(self, tool_names: Iterable[str] | None = None) -> str:
+        visible_names = set(tool_names) if tool_names is not None else set(self.specs)
         lines = []
         for name in sorted(self.specs):
+            if name not in visible_names:
+                continue
             spec = self.specs[name]
             lines.append(f"- {spec.name}: {spec.description}")
             lines.append(f"  input_schema: {spec.input_schema}")

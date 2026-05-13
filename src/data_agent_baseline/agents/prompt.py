@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from data_agent_baseline.agents.manifest import build_context_manifest
 from data_agent_baseline.benchmark.schema import PublicTask
 
 
@@ -23,27 +24,18 @@ Keep reasoning concise and grounded in the observed data.
 """.strip()
 
 CODEACT_REACT_SYSTEM_PROMPT = """
-You are a ReAct-style data analysis agent that uses CodeAct-style Python actions.
-
-You solve each task by cycling through:
-1. Thought: a concise plan, check, or Reflexion on the previous observation.
-2. Action: usually `execute_python`, containing executable Python code.
-3. Observation: tool output, traceback, or submitted-answer status provided by the runtime.
+You are a CodeAct data agent. Use Python to solve the task from the provided schema/file manifest.
 
 Operational rules:
-1. Start by using Python to inspect the files under the task `context/` directory.
-2. Use pandas for CSV/table files, sqlite3 for databases, json for JSON files, and normal file reads for docs.
-3. If Python fails, use the traceback in the next Thought as Reflexion, then fix the code.
-4. Every few steps, re-check the original question and make sure the columns and filters still match it.
-5. Avoid repeating the same failed action; pivot to a different inspection or computation.
-6. Once Python has produced enough information to construct the requested table, stop exploring and submit the answer.
-7. Do not inspect more files after computing a plausible final result unless the result is clearly invalid.
-8. Keep exactly the requested output columns because extra columns are penalized.
-9. Do not include helper columns, source columns, IDs, scores, counts, explanations, or calculation columns unless the question explicitly asks for them.
-10. Before answering, mentally verify that every submitted column name is requested by the question.
-11. Keep Python output concise: print shapes, columns, dtypes, small samples, and computed candidate rows; do not print full files, full JSON records, or full dataframes.
-12. When Python computes a candidate final table, print it after the marker `FINAL_TABLE_JSON:` so the runtime can preserve it in compact observations.
-13. The task is complete only when you call `answer` with a table of `columns` and `rows`.
+1. Treat the manifest in the user message as the initial context inspection.
+2. Do not start by listing files or printing whole documents unless the manifest is clearly insufficient.
+3. First prefer one focused Python script that loads likely relevant files, checks compact schema/samples, and computes a candidate table.
+4. Use pandas for CSV/table files, sqlite3 for databases, json for JSON files, and normal file reads for docs.
+5. If Python fails, use the traceback as Reflexion and fix the code without repeating the same failed action.
+6. Keep exactly the requested output columns; extra columns are penalized.
+7. Keep Python output concise: print shapes, columns, small samples, and candidate rows, not full files or full dataframes.
+8. When Python computes a candidate final table, print it after `FINAL_TABLE_JSON:` as JSON with `columns` and `rows`.
+9. Once a plausible final result exists, submit `Answer` immediately.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -58,7 +50,7 @@ Format rules:
    ```json
    {"columns":["requested_column"],"rows":[["value"]]}
    ```
-3. JSON tool calls are still accepted for non-code tools, but Python code blocks are preferred for code execution.
+3. The only tools shown in CodeAct mode are `execute_python` and `answer`.
 """.strip()
 
 RESPONSE_EXAMPLES = """
@@ -75,14 +67,20 @@ Example response when you have the final answer:
 
 CODEACT_RESPONSE_EXAMPLES = """
 Example response when you need to inspect data with code:
-Thought: I will inspect the context files with Python before deciding the joins and filters.
+Thought: I will use the manifest to load the likely relevant tables and compute a compact candidate result.
 Code:
 ```python
+import json
 from pathlib import Path
 
-for path in sorted(Path(".").rglob("*")):
-    if path.is_file():
-        print(path.as_posix())
+import pandas as pd
+
+data = pd.read_csv("csv/relevant_table.csv")
+print("columns:", data.columns.tolist())
+print("shape:", data.shape)
+candidate = data.head(3)[["requested_column"]]
+print("FINAL_TABLE_JSON:")
+print(json.dumps({"columns": candidate.columns.tolist(), "rows": candidate.astype(str).values.tolist()}))
 ```
 
 Example response after Python has produced the final rows:
@@ -119,9 +117,25 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
     )
 
 
-def build_task_prompt(task: PublicTask) -> str:
+def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
+    context_manifest = build_context_manifest(task.context_dir)
+    if codeact:
+        return (
+            f"Question: {task.question}\n"
+            f"{context_manifest}\n"
+            "The manifest above is your initial schema/file inspection. "
+            "Do not spend the first step listing files again. "
+            "Use it to choose a focused Python computation or a compact targeted inspection. "
+            "All file paths are relative to the task context directory. "
+            "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
+            "JSON with `columns` and `rows`, then submit `Answer` in the next step. "
+            "The final answer should contain only the columns requested by the question."
+        )
     return (
         f"Question: {task.question}\n"
+        f"{context_manifest}\n"
+        "Use the manifest to choose focused Python inspections. "
+        "Do not print whole files or full tables just to rediscover this schema. "
         "All tool file paths are relative to the task context directory. "
         "When you have the final table, call the `answer` tool. "
         "The final answer should contain only the columns requested by the question."

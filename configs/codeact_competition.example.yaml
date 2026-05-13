@@ -8,6 +8,8 @@ agent:
   api_key: YOUR_API_KEY
   max_steps: 10
   temperature: 0.0
+  model_timeout_seconds: 90
+  max_output_tokens: 2048
   python_timeout_seconds: 45
   prompt_history_steps: 4
   full_observation_threshold: 6000

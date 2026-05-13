@@ -6,13 +6,14 @@ from dataclasses import dataclass
 
 from data_agent_baseline.agents.model import ModelAdapter, ModelMessage, ModelStep
 from data_agent_baseline.agents.prompt import (
+    CODEACT_REACT_SYSTEM_PROMPT,
     REACT_SYSTEM_PROMPT,
     build_observation_prompt,
     build_system_prompt,
     build_task_prompt,
 )
 from data_agent_baseline.agents.runtime import AgentRunResult, AgentRuntimeState, StepRecord
-from data_agent_baseline.benchmark.schema import PublicTask
+from data_agent_baseline.benchmark.schema import AnswerTable, PublicTask
 from data_agent_baseline.tools.registry import ToolRegistry
 
 
@@ -365,19 +366,22 @@ class ReActAgent:
         tools: ToolRegistry,
         config: ReActAgentConfig | None = None,
         system_prompt: str | None = None,
+        prompt_tool_names: tuple[str, ...] | None = None,
     ) -> None:
         self.model = model
         self.tools = tools
         self.config = config or ReActAgentConfig()
         self.system_prompt = system_prompt or REACT_SYSTEM_PROMPT
+        self.prompt_tool_names = prompt_tool_names
 
     def _build_messages(self, task: PublicTask, state: AgentRuntimeState) -> list[ModelMessage]:
+        is_codeact = self.system_prompt == CODEACT_REACT_SYSTEM_PROMPT
         system_content = build_system_prompt(
-            self.tools.describe_for_prompt(),
+            self.tools.describe_for_prompt(self.prompt_tool_names),
             system_prompt=self.system_prompt,
         )
         messages = [ModelMessage(role="system", content=system_content)]
-        messages.append(ModelMessage(role="user", content=build_task_prompt(task)))
+        messages.append(ModelMessage(role="user", content=build_task_prompt(task, codeact=is_codeact)))
         history_steps = state.steps
         if self.config.prompt_history_steps > 0:
             history_steps = history_steps[-self.config.prompt_history_steps :]
@@ -393,10 +397,64 @@ class ReActAgent:
             )
         return messages
 
+    def _candidate_answer_from_observation(self, observation: dict[str, object]) -> AnswerTable | None:
+        if observation.get("tool") != "execute_python":
+            return None
+        content = observation.get("content")
+        if not isinstance(content, dict):
+            return None
+        stdout = str(content.get("output") or content.get("stdout") or "")
+        marker_positions = [
+            stdout.lower().find(marker.lower())
+            for marker in FINAL_RESULT_MARKERS
+            if stdout.lower().find(marker.lower()) >= 0
+        ]
+        if not marker_positions:
+            return None
+        candidate_text = stdout[min(marker_positions) :]
+        try:
+            payload = _load_first_json_object(candidate_text)
+        except ValueError:
+            return None
+
+        if payload.get("action") == "answer" and isinstance(payload.get("action_input"), dict):
+            payload = payload["action_input"]
+        columns = payload.get("columns")
+        rows = payload.get("rows")
+        if not isinstance(columns, list) or not columns or not all(isinstance(column, str) for column in columns):
+            return None
+        if not isinstance(rows, list):
+            return None
+        normalized_rows: list[list[object]] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) != len(columns):
+                return None
+            normalized_rows.append(list(row))
+        return AnswerTable(columns=list(columns), rows=normalized_rows)
+
     def run(self, task: PublicTask) -> AgentRunResult:
         state = AgentRuntimeState()
+        fallback_answer: AnswerTable | None = None
         for step_index in range(1, self.config.max_steps + 1):
-            raw_response = self.model.complete(self._build_messages(task, state))
+            try:
+                raw_response = self.model.complete(self._build_messages(task, state))
+            except Exception as exc:  # noqa: BLE001
+                state.steps.append(
+                    StepRecord(
+                        step_index=step_index,
+                        thought="",
+                        action="__error__",
+                        action_input={},
+                        raw_response="",
+                        observation={
+                            "ok": False,
+                            "error": f"Model request failed before a response was returned: {exc}",
+                        },
+                        ok=False,
+                    )
+                )
+                state.failure_reason = f"Model request failed before step {step_index}: {exc}"
+                break
             try:
                 model_step = parse_model_step(raw_response)
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
@@ -415,6 +473,9 @@ class ReActAgent:
                     ok=tool_result.ok,
                 )
                 state.steps.append(step_record)
+                candidate_answer = self._candidate_answer_from_observation(observation)
+                if candidate_answer is not None:
+                    fallback_answer = candidate_answer
                 if tool_result.is_terminal:
                     state.answer = tool_result.answer
                     break
@@ -434,6 +495,9 @@ class ReActAgent:
                         ok=False,
                     )
                 )
+
+        if state.answer is None and fallback_answer is not None:
+            state.answer = fallback_answer
 
         if state.answer is None and state.failure_reason is None:
             state.failure_reason = "Agent did not submit an answer within max_steps."

@@ -29,6 +29,8 @@ class AgentConfig:
     api_key: str = ""
     max_steps: int = 16
     temperature: float = 0.0
+    model_timeout_seconds: float = 90.0
+    max_output_tokens: int | None = 2048
     python_timeout_seconds: int = 45
     prompt_history_steps: int = 4
     full_observation_threshold: int = 6000
@@ -82,6 +84,14 @@ def load_app_config(config_path: Path) -> AppConfig:
         api_key=str(agent_payload.get("api_key", agent_defaults.api_key)),
         max_steps=int(agent_payload.get("max_steps", agent_defaults.max_steps)),
         temperature=float(agent_payload.get("temperature", agent_defaults.temperature)),
+        model_timeout_seconds=float(
+            agent_payload.get("model_timeout_seconds", agent_defaults.model_timeout_seconds)
+        ),
+        max_output_tokens=(
+            None
+            if agent_payload.get("max_output_tokens", agent_defaults.max_output_tokens) is None
+            else int(agent_payload.get("max_output_tokens", agent_defaults.max_output_tokens))
+        ),
         python_timeout_seconds=int(
             agent_payload.get("python_timeout_seconds", agent_defaults.python_timeout_seconds)
         ),

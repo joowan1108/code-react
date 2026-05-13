@@ -68,6 +68,8 @@ def build_model_adapter(config: AppConfig):
         api_base=config.agent.api_base,
         api_key=config.agent.api_key,
         temperature=config.agent.temperature,
+        timeout_seconds=config.agent.model_timeout_seconds,
+        max_output_tokens=config.agent.max_output_tokens,
     )
 
 
@@ -108,6 +110,7 @@ def _run_single_task_core(
     if config.agent.strategy not in {"react", "codeact"}:
         raise ValueError(f"Unknown agent.strategy: {config.agent.strategy}")
     system_prompt = CODEACT_REACT_SYSTEM_PROMPT if config.agent.strategy == "codeact" else None
+    prompt_tool_names = ("execute_python", "answer") if config.agent.strategy == "codeact" else None
     agent = ReActAgent(
         model=effective_model,
         tools=tools
@@ -124,6 +127,7 @@ def _run_single_task_core(
             final_marker_chars=config.agent.final_marker_chars,
         ),
         system_prompt=system_prompt,
+        prompt_tool_names=prompt_tool_names,
     )
     run_result = agent.run(task)
     return run_result.to_dict()

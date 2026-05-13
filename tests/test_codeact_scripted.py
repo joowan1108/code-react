@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from data_agent_baseline.agents.model import ScriptedModelAdapter
+from data_agent_baseline.agents.manifest import build_context_manifest
 from data_agent_baseline.agents.react import (
     ReActAgent,
     ReActAgentConfig,
@@ -100,41 +101,80 @@ def test_compact_observation_preserves_final_marker_head_and_tail() -> None:
 
 
 def test_prompt_history_uses_recent_steps_only() -> None:
+    temp_context = tempfile.TemporaryDirectory()
+    context_path = Path(temp_context.name)
+    (context_path / "data.csv").write_text("x,y\n1,2\n", encoding="utf-8")
     task = PublicTask(
         record=TaskRecord(task_id="task_x", difficulty="easy", question="Return x."),
-        assets=TaskAssets(task_dir=Path("."), context_dir=Path(".")),
+        assets=TaskAssets(task_dir=context_path, context_dir=context_path),
     )
     state = AgentRuntimeState()
-    for index in range(1, 7):
-        state.steps.append(
-            StepRecord(
-                step_index=index,
-                thought=f"thought {index}",
-                action="execute_python",
-                action_input={"code": f"print({index})"},
-                raw_response=f"Thought: step {index}\nCode:\n```python\nprint({index})\n```",
-                observation={
-                    "ok": True,
-                    "tool": "execute_python",
-                    "content": {"success": True, "output": f"output {index}", "stderr": ""},
-                },
-                ok=True,
+    try:
+        for index in range(1, 7):
+            state.steps.append(
+                StepRecord(
+                    step_index=index,
+                    thought=f"thought {index}",
+                    action="execute_python",
+                    action_input={"code": f"print({index})"},
+                    raw_response=f"Thought: step {index}\nCode:\n```python\nprint({index})\n```",
+                    observation={
+                        "ok": True,
+                        "tool": "execute_python",
+                        "content": {"success": True, "output": f"output {index}", "stderr": ""},
+                    },
+                    ok=True,
+                )
             )
+
+        agent = ReActAgent(
+            model=ScriptedModelAdapter([]),
+            tools=ToolRegistry(specs={}, handlers={}),
+            config=ReActAgentConfig(prompt_history_steps=4),
+        )
+        messages = agent._build_messages(task, state)
+        assistant_messages = [message.content for message in messages if message.role == "assistant"]
+        joined_messages = "\n".join(message.content for message in messages)
+        assert len(assistant_messages) == 4
+        assert "step 1" not in joined_messages
+        assert "output 2" not in joined_messages
+        assert "step 3" in joined_messages
+        assert "output 6" in joined_messages
+    finally:
+        temp_context.cleanup()
+
+
+def test_context_manifest_summarizes_structured_files() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "csv").mkdir()
+        (context_path / "json").mkdir()
+        (context_path / "knowledge.md").write_text("# Knowledge\nDetails", encoding="utf-8")
+        (context_path / "csv" / "members.csv").write_text(
+            "member_id,name,major\n1,Ada,CS\n",
+            encoding="utf-8",
+        )
+        (context_path / "json" / "events.json").write_text(
+            json.dumps(
+                {
+                    "table": "event",
+                    "records": [
+                        {"event_id": "e1", "event_name": "Talk", "cost": 10},
+                        {"event_id": "e2", "event_name": "Meetup", "cost": 20},
+                    ],
+                }
+            ),
+            encoding="utf-8",
         )
 
-    agent = ReActAgent(
-        model=ScriptedModelAdapter([]),
-        tools=ToolRegistry(specs={}, handlers={}),
-        config=ReActAgentConfig(prompt_history_steps=4),
-    )
-    messages = agent._build_messages(task, state)
-    assistant_messages = [message.content for message in messages if message.role == "assistant"]
-    joined_messages = "\n".join(message.content for message in messages)
-    assert len(assistant_messages) == 4
-    assert "step 1" not in joined_messages
-    assert "output 2" not in joined_messages
-    assert "step 3" in joined_messages
-    assert "output 6" in joined_messages
+        manifest = build_context_manifest(context_path)
+        assert "Concise context manifest" in manifest
+        assert "csv/members.csv" in manifest
+        assert "member_id, name, major" in manifest
+        assert "json/events.json" in manifest
+        assert "table=event" in manifest
+        assert "event_id, event_name, cost" in manifest
+        assert "knowledge.md" in manifest
 
 
 def test_codeact_scripted_task_11() -> None:

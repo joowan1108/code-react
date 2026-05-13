@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -34,29 +33,38 @@ class OpenAIModelAdapter:
         api_base: str,
         api_key: str,
         temperature: float,
+        timeout_seconds: float = 90.0,
+        max_output_tokens: int | None = 2048,
     ) -> None:
         self.model = model
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.temperature = temperature
+        self.timeout_seconds = timeout_seconds
+        self.max_output_tokens = max_output_tokens
 
     def complete(self, messages: list[ModelMessage]) -> str:
         if not self.api_base:
             raise RuntimeError("Missing model API base URL.")
 
-        client = OpenAI(
-            api_key=self.api_key or "EMPTY",
-            base_url=self.api_base,
-            timeout=float(os.environ.get("MODEL_REQUEST_TIMEOUT_SECONDS", "180")),
-            max_retries=int(os.environ.get("MODEL_MAX_RETRIES", "2")),
-        )
+        client_kwargs: dict[str, Any] = {
+            "api_key": self.api_key or "EMPTY",
+            "base_url": self.api_base,
+            "max_retries": 0,
+        }
+        if self.timeout_seconds > 0:
+            client_kwargs["timeout"] = self.timeout_seconds
+        client = OpenAI(**client_kwargs)
 
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": message.role, "content": message.content} for message in messages],
-                temperature=self.temperature,
-            )
+            request: dict[str, Any] = {
+                "model": self.model,
+                "messages": [{"role": message.role, "content": message.content} for message in messages],
+                "temperature": self.temperature,
+            }
+            if self.max_output_tokens is not None and self.max_output_tokens > 0:
+                request["max_tokens"] = self.max_output_tokens
+            response = client.chat.completions.create(**request)
         except APIError as exc:
             raise RuntimeError(f"Model request failed: {exc}") from exc
 
