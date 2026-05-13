@@ -221,6 +221,11 @@ def test_codeact_scripted_task_11() -> None:
         )
         assert artifact.succeeded
         assert artifact.prediction_csv_path is not None
+        partial_trace_path = artifact.task_output_dir / "trace.partial.json"
+        assert partial_trace_path.exists()
+        partial_trace = json.loads(partial_trace_path.read_text(encoding="utf-8"))
+        assert partial_trace["task_id"] == "task_11"
+        assert partial_trace["steps"]
         score = score_prediction_csv(
             artifact.prediction_csv_path,
             Path("data/public/output/task_11/gold.csv"),

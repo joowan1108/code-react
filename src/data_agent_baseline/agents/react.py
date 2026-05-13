@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from data_agent_baseline.agents.model import ModelAdapter, ModelMessage, ModelStep
@@ -869,12 +870,45 @@ class ReActAgent:
         config: ReActAgentConfig | None = None,
         system_prompt: str | None = None,
         prompt_tool_names: tuple[str, ...] | None = None,
+        checkpoint_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self.model = model
         self.tools = tools
         self.config = config or ReActAgentConfig()
         self.system_prompt = system_prompt or REACT_SYSTEM_PROMPT
         self.prompt_tool_names = prompt_tool_names
+        self.checkpoint_callback = checkpoint_callback
+
+    def _checkpoint(
+        self,
+        task: PublicTask,
+        state: AgentRuntimeState,
+        *,
+        status: str,
+        step_index: int | None = None,
+    ) -> None:
+        if self.checkpoint_callback is None:
+            return
+        payload = AgentRunResult(
+            task_id=task.task_id,
+            answer=state.answer,
+            steps=list(state.steps),
+            failure_reason=state.failure_reason,
+        ).to_dict()
+        payload["checkpoint"] = {
+            "status": status,
+            "step_index": step_index,
+        }
+        self.checkpoint_callback(payload)
+
+    def _append_step(
+        self,
+        task: PublicTask,
+        state: AgentRuntimeState,
+        step: StepRecord,
+    ) -> None:
+        state.steps.append(step)
+        self._checkpoint(task, state, status="after_step", step_index=step.step_index)
 
     def _build_messages(
         self,
@@ -1023,6 +1057,7 @@ class ReActAgent:
         consecutive_parse_errors = 0
         for step_index in range(1, self.config.max_steps + 1):
             try:
+                self._checkpoint(task, state, status="before_model_request", step_index=step_index)
                 raw_response = self.model.complete(
                     self._build_messages(
                         task,
@@ -1038,7 +1073,10 @@ class ReActAgent:
                     )
                 )
             except Exception as exc:  # noqa: BLE001
-                state.steps.append(
+                state.failure_reason = f"Model request failed before step {step_index}: {exc}"
+                self._append_step(
+                    task,
+                    state,
                     StepRecord(
                         step_index=step_index,
                         thought="",
@@ -1052,7 +1090,6 @@ class ReActAgent:
                         ok=False,
                     )
                 )
-                state.failure_reason = f"Model request failed before step {step_index}: {exc}"
                 break
             try:
                 model_step = parse_model_step(raw_response)
@@ -1066,7 +1103,9 @@ class ReActAgent:
                         "Use `Thought:` plus fenced `Code:` or `Thought:` plus `Answer:` fenced JSON."
                     ),
                 }
-                state.steps.append(
+                self._append_step(
+                    task,
+                    state,
                     StepRecord(
                         step_index=step_index,
                         thought="",
@@ -1093,7 +1132,9 @@ class ReActAgent:
                         ),
                         "candidate_preview": _answer_preview(pending_candidate.answer, max_rows=5),
                     }
-                    state.steps.append(
+                    self._append_step(
+                        task,
+                        state,
                         StepRecord(
                             step_index=step_index,
                             thought=model_step.thought,
@@ -1124,7 +1165,9 @@ class ReActAgent:
                                 ),
                             },
                         }
-                        state.steps.append(
+                        self._append_step(
+                            task,
+                            state,
                             StepRecord(
                                 step_index=step_index,
                                 thought=model_step.thought,
@@ -1159,7 +1202,9 @@ class ReActAgent:
                                 ),
                             },
                         }
-                        state.steps.append(
+                        self._append_step(
+                            task,
+                            state,
                             StepRecord(
                                 step_index=step_index,
                                 thought=model_step.thought,
@@ -1184,7 +1229,9 @@ class ReActAgent:
                             "final_preview": _answer_preview(state.answer, max_rows=5),
                         },
                     }
-                    state.steps.append(
+                    self._append_step(
+                        task,
+                        state,
                         StepRecord(
                             step_index=step_index,
                             thought=model_step.thought,
@@ -1205,7 +1252,9 @@ class ReActAgent:
                         ),
                         "candidate_preview": _answer_preview(pending_candidate.answer, max_rows=5),
                     }
-                    state.steps.append(
+                    self._append_step(
+                        task,
+                        state,
                         StepRecord(
                             step_index=step_index,
                             thought=model_step.thought,
@@ -1249,7 +1298,9 @@ class ReActAgent:
                                     ),
                                 },
                             }
-                            state.steps.append(
+                            self._append_step(
+                                task,
+                                state,
                                 StepRecord(
                                     step_index=step_index,
                                     thought=model_step.thought,
@@ -1276,7 +1327,9 @@ class ReActAgent:
                                     ),
                                 },
                             }
-                            state.steps.append(
+                            self._append_step(
+                                task,
+                                state,
                                 StepRecord(
                                     step_index=step_index,
                                     thought=model_step.thought,
@@ -1305,7 +1358,7 @@ class ReActAgent:
                     observation=observation,
                     ok=tool_result.ok,
                 )
-                state.steps.append(step_record)
+                self._append_step(task, state, step_record)
                 candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
                     decision = _candidate_decision_from_observation(task, observation, candidate_answer)
@@ -1346,6 +1399,12 @@ class ReActAgent:
                             )
                         ),
                     }
+                    self._checkpoint(
+                        task,
+                        state,
+                        status="after_candidate_decision",
+                        step_index=step_index,
+                    )
                     if decision.store_as_fallback:
                         fallback_answer = decision.answer
                     if requires_schema_validation:
@@ -1376,7 +1435,9 @@ class ReActAgent:
                     "ok": False,
                     "error": str(exc),
                 }
-                state.steps.append(
+                self._append_step(
+                    task,
+                    state,
                     StepRecord(
                         step_index=step_index,
                         thought="",
