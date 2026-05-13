@@ -37,36 +37,10 @@ class CandidateAnswerDecision:
     reasons: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class PendingCandidate:
-    answer: AnswerTable
-    reasons: tuple[str, ...]
-    source_step_index: int
-
-
-@dataclass(frozen=True, slots=True)
-class SchemaDecision:
-    decision: str
-    columns: tuple[str, ...]
-    reason: str = ""
-
-
-SCHEMA_DECISION_ACTION = "__schema_decision__"
-
 FINAL_RESULT_MARKERS = (
     "FINAL_TABLE_JSON:",
     "FINAL_RESULT:",
     "ANSWER_CANDIDATE:",
-)
-
-FINAL_AUDIT_MARKERS = (
-    "FINAL_AUDIT_JSON:",
-    "AUDIT_JSON:",
-)
-
-AUDIT_REASON_PREFIXES = (
-    "calculation_audit",
-    "audit_",
 )
 
 
@@ -116,7 +90,7 @@ def _parse_json_model_step(raw_response: str) -> ModelStep:
 
 
 def _extract_labeled_text(raw_response: str, label: str) -> str | None:
-    stop_labels = "Thought|Reflexion|Action|Code|Output|Answer|Final Answer|SchemaDecision|Observation"
+    stop_labels = "Thought|Reflexion|Action|Code|Output|Answer|Final Answer|Observation"
     pattern = rf"(?:^|\n)\s*{label}\s*:\s*(.*?)(?=\n\s*(?:{stop_labels})\s*:|\Z)"
     match = re.search(pattern, raw_response, flags=re.IGNORECASE | re.DOTALL)
     if match is None:
@@ -172,42 +146,6 @@ def _extract_answer_step(raw_response: str) -> ModelStep | None:
     )
 
 
-def _extract_schema_decision_step(raw_response: str) -> ModelStep | None:
-    schema_text = _extract_labeled_text(raw_response, "SchemaDecision")
-    if schema_text is None:
-        try:
-            payload = _load_single_json_object(_strip_json_fence(raw_response))
-        except Exception:
-            return None
-        if "decision" not in payload:
-            return None
-    else:
-        payload = _load_first_json_object(schema_text)
-
-    decision = payload.get("decision")
-    if not isinstance(decision, str) or not decision.strip():
-        raise ValueError("SchemaDecision must include a non-empty decision string.")
-    columns = payload.get("columns", [])
-    if columns is None:
-        columns = []
-    if not isinstance(columns, list) or not all(isinstance(column, str) for column in columns):
-        raise ValueError("SchemaDecision columns must be a list of strings.")
-    reason = payload.get("reason", "")
-    if not isinstance(reason, str):
-        reason = str(reason)
-
-    return ModelStep(
-        thought=_extract_thought(raw_response),
-        action=SCHEMA_DECISION_ACTION,
-        action_input={
-            "decision": decision.strip().lower(),
-            "columns": columns,
-            "reason": reason,
-        },
-        raw_response=raw_response,
-    )
-
-
 def _extract_code_block(raw_response: str) -> str | None:
     code_after_label = re.search(
         r"(?:^|\n)\s*Code\s*:\s*```(?:python|py)?\s*(.*?)\s*```",
@@ -245,10 +183,6 @@ def _parse_codeact_model_step(raw_response: str) -> ModelStep:
     answer_step = _extract_answer_step(raw_response)
     if answer_step is not None:
         return answer_step
-
-    schema_decision_step = _extract_schema_decision_step(raw_response)
-    if schema_decision_step is not None:
-        return schema_decision_step
 
     raise ValueError("Model response is neither a JSON action nor a CodeAct code/answer block.")
 
@@ -343,166 +277,6 @@ def _question_expects_nonempty_rows(question: str) -> bool:
     )
 
 
-def _question_requires_tie_check(question: str) -> bool:
-    tokens = _split_identifier_tokens(question)
-    return bool(
-        tokens
-        & {
-            "lowest",
-            "highest",
-            "minimum",
-            "maximum",
-            "min",
-            "max",
-            "least",
-            "most",
-            "best",
-            "worst",
-            "top",
-            "smallest",
-            "largest",
-            "fewest",
-        }
-    )
-
-
-def _stdout_mentions_tie_check(stdout: str) -> bool:
-    lowered = stdout.lower()
-    return any(
-        phrase in lowered
-        for phrase in (
-            "tie",
-            "ties",
-            "all rows",
-            "all matching",
-            "all matches",
-            "same minimum",
-            "same maximum",
-            "same lowest",
-            "same highest",
-            "including tied",
-            "including ties",
-        )
-    )
-
-
-def _contains_any(text: str, needles: set[str]) -> bool:
-    lowered = text.lower()
-    return any(needle in lowered for needle in needles)
-
-
-def _question_requires_calculation_audit(question: str) -> bool:
-    q = question.lower()
-    tokens = _split_identifier_tokens(question)
-    risky_tokens = {
-        "average",
-        "avg",
-        "mean",
-        "count",
-        "distinct",
-        "unique",
-        "percentage",
-        "percent",
-        "ratio",
-        "proportion",
-        "total",
-        "sum",
-        "more",
-        "less",
-        "most",
-        "least",
-        "highest",
-        "lowest",
-        "maximum",
-        "minimum",
-        "top",
-        "last",
-        "latest",
-        "first",
-        "list",
-        "all",
-        "which",
-        "between",
-        "before",
-        "after",
-        "monthly",
-        "yearly",
-    }
-    risky_phrases = (
-        "how many",
-        "how much",
-        "what percentage",
-        "how many times",
-        "more than",
-        "less than",
-        "at least",
-        "at most",
-        "greater than",
-        "lower than",
-        "during ",
-    )
-    return bool(tokens & risky_tokens) or any(phrase in q for phrase in risky_phrases)
-
-
-def _flatten_audit_text(value: object) -> str:
-    if isinstance(value, dict):
-        return " ".join(f"{key} {_flatten_audit_text(child)}" for key, child in value.items())
-    if isinstance(value, list):
-        return " ".join(_flatten_audit_text(item) for item in value)
-    return str(value)
-
-
-def _audit_validation_reasons(task: PublicTask, audit: dict[str, object] | None) -> tuple[str, ...]:
-    if not _question_requires_calculation_audit(task.question):
-        return ()
-
-    if audit is None:
-        return ("calculation_audit_required",)
-
-    reasons: list[str] = []
-    q = task.question.lower()
-    tokens = _split_identifier_tokens(task.question)
-    audit_text = _flatten_audit_text(audit).lower()
-
-    if tokens & {"percentage", "percent", "ratio", "proportion"} or "how many times" in q:
-        if not _contains_any(audit_text, {"numerator", "denominator", "divide", "ratio", "percentage"}):
-            reasons.append("audit_missing_numerator_denominator")
-
-    if tokens & {"average", "avg", "mean"}:
-        if not _contains_any(audit_text, {"average", "avg", "mean", "sum", "count"}):
-            reasons.append("audit_missing_average_basis")
-
-    if tokens & {"count", "many", "number"} or "how many" in q:
-        if not _contains_any(audit_text, {"count", "row_count", "rows", "distinct", "unique"}):
-            reasons.append("audit_missing_count_basis")
-
-    if tokens & {"distinct", "unique", "different"}:
-        if not _contains_any(audit_text, {"distinct", "unique", "dedup", "duplicate"}):
-            reasons.append("audit_missing_distinct_check")
-
-    if "monthly" in tokens or "per month" in q:
-        if not _contains_any(audit_text, {"monthly", "month", "/ 12", "divide by 12", "divided by 12"}):
-            reasons.append("audit_missing_monthly_unit_conversion")
-
-    if _question_requires_tie_check(task.question):
-        if not _contains_any(audit_text, {"tie", "ties", "all matching", "all rows", "rank", "sort"}):
-            reasons.append("audit_missing_tie_check")
-
-    if _question_expects_nonempty_rows(task.question):
-        if not _contains_any(audit_text, {"filter", "condition", "row_count", "rows", "result_count"}):
-            reasons.append("audit_missing_filter_trace")
-
-    if tokens & {"last", "latest", "recent", "first"}:
-        if not _contains_any(audit_text, {"last", "latest", "first", "sort", "order", "date", "time"}):
-            reasons.append("audit_missing_ordering_check")
-
-    return tuple(reasons)
-
-
-def _has_audit_reason(reasons: tuple[str, ...]) -> bool:
-    return any(reason.startswith(AUDIT_REASON_PREFIXES) for reason in reasons)
-
-
 def _normalize_answer_cell(value: object) -> object:
     if not isinstance(value, str):
         return value
@@ -536,61 +310,6 @@ def _normalize_answer_table(answer: AnswerTable) -> AnswerTable:
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
     _ = task
     return _normalize_answer_table(answer)
-
-
-def _answer_needs_schema_validation(task: PublicTask, answer: AnswerTable) -> bool:
-    _ = task
-    return len(answer.columns) > 1
-
-
-def _project_answer_table(answer: AnswerTable, columns: tuple[str, ...]) -> AnswerTable:
-    index_by_column = {column: index for index, column in enumerate(answer.columns)}
-    indices = [index_by_column[column] for column in columns]
-    return AnswerTable(
-        columns=list(columns),
-        rows=[[row[index] for index in indices] for row in answer.rows],
-    )
-
-
-def _parse_schema_decision_payload(
-    action_input: dict[str, object],
-    pending_candidate: PendingCandidate,
-) -> SchemaDecision:
-    decision = action_input.get("decision")
-    if not isinstance(decision, str):
-        raise ValueError("SchemaDecision decision must be a string.")
-    normalized_decision = decision.strip().lower()
-    if normalized_decision not in {"accept", "select_columns", "reject"}:
-        raise ValueError("SchemaDecision decision must be accept, select_columns, or reject.")
-
-    reason = action_input.get("reason", "")
-    if not isinstance(reason, str):
-        reason = str(reason)
-
-    if normalized_decision == "accept":
-        return SchemaDecision(
-            decision=normalized_decision,
-            columns=tuple(pending_candidate.answer.columns),
-            reason=reason,
-        )
-
-    if normalized_decision == "reject":
-        return SchemaDecision(decision=normalized_decision, columns=(), reason=reason)
-
-    columns = action_input.get("columns")
-    if not isinstance(columns, list) or not columns or not all(isinstance(column, str) for column in columns):
-        raise ValueError("select_columns SchemaDecision must include a non-empty columns list.")
-
-    available_columns = set(pending_candidate.answer.columns)
-    unknown_columns = [column for column in columns if column not in available_columns]
-    if unknown_columns:
-        raise ValueError(f"SchemaDecision selected unknown columns: {unknown_columns}")
-
-    return SchemaDecision(
-        decision=normalized_decision,
-        columns=tuple(columns),
-        reason=reason,
-    )
 
 
 def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None:
@@ -633,24 +352,6 @@ def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, objec
         return None
 
 
-def _audit_payload_from_observation(observation: dict[str, object]) -> dict[str, object] | None:
-    if observation.get("tool") != "execute_python":
-        return None
-    content = observation.get("content")
-    if not isinstance(content, dict):
-        return None
-    stdout = str(content.get("output") or content.get("stdout") or "")
-    return _find_marker_payload(stdout, FINAL_AUDIT_MARKERS)
-
-
-def _latest_audit_payload_from_steps(steps: list[StepRecord]) -> dict[str, object] | None:
-    for step in reversed(steps):
-        audit = _audit_payload_from_observation(step.observation)
-        if audit is not None:
-            return audit
-    return None
-
-
 def _candidate_decision_from_observation(
     task: PublicTask,
     observation: dict[str, object],
@@ -660,7 +361,6 @@ def _candidate_decision_from_observation(
     hard_reasons: list[str] = []
     content = observation.get("content")
     content_dict = content if isinstance(content, dict) else {}
-    stdout = str(content_dict.get("output") or content_dict.get("stdout") or "")
     stderr = str(content_dict.get("stderr") or "")
     traceback_text = str(content_dict.get("traceback") or "")
 
@@ -675,22 +375,6 @@ def _candidate_decision_from_observation(
     if _question_is_single_value(task.question) and (len(answer.rows) != 1 or len(answer.columns) != 1):
         reasons.append("single_value_question_requires_one_cell_answer")
         hard_reasons.append("single_value_question_requires_one_cell_answer")
-
-    if _answer_needs_schema_validation(task, answer):
-        reasons.append("schema_validation_required")
-
-    if (
-        _question_requires_tie_check(task.question)
-        and len(answer.rows) <= 1
-        and not _stdout_mentions_tie_check(stdout)
-    ):
-        reasons.append("min_max_or_top_question_needs_explicit_tie_check")
-
-    if len(answer.columns) > 3 and not _question_is_single_value(task.question):
-        reasons.append("candidate_has_many_columns_verify_exact_schema")
-
-    audit = _audit_payload_from_observation(observation)
-    reasons.extend(_audit_validation_reasons(task, audit))
 
     store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
     return CandidateAnswerDecision(
@@ -707,10 +391,6 @@ def _find_final_marker_segment(text: str, max_chars: int) -> str | None:
     lower_text = text.lower()
     best_index: int | None = None
     for marker in FINAL_RESULT_MARKERS:
-        index = lower_text.find(marker.lower())
-        if index >= 0 and (best_index is None or index < best_index):
-            best_index = index
-    for marker in FINAL_AUDIT_MARKERS:
         index = lower_text.find(marker.lower())
         if index >= 0 and (best_index is None or index < best_index):
             best_index = index
@@ -958,39 +638,10 @@ class ReActAgent:
         step_index: int,
         state: AgentRuntimeState,
         fallback_answer: AnswerTable | None,
-        pending_candidate: PendingCandidate | None,
         consecutive_parse_errors: int,
     ) -> str | None:
         if self.system_prompt != CODEACT_REACT_SYSTEM_PROMPT:
             return None
-
-        if pending_candidate is not None:
-            return (
-                "Semantic schema validation required. Do not run Python and do not recompute the answer.\n"
-                f"Question: {task.question}\n"
-                f"Candidate answer preview: {_safe_json_dumps(_answer_preview(pending_candidate.answer, max_rows=5))}\n"
-                f"Runtime concerns: {', '.join(pending_candidate.reasons)}\n\n"
-                "Choose columns by semantic meaning, using the question and the sample values. "
-                "Keep columns that are directly needed to answer the question; remove helper columns such as ids, dates, ranks, "
-                "scores, or costs only when they are not part of the requested answer. "
-                "If multiple columns are semantically requested, keep all of them. "
-                "If the candidate row set or calculation looks wrong, reject it.\n\n"
-                "Return exactly one schema decision in this format:\n"
-                "SchemaDecision:\n"
-                "```json\n"
-                "{\"decision\":\"accept\",\"reason\":\"columns answer the question\"}\n"
-                "```\n"
-                "or\n"
-                "SchemaDecision:\n"
-                "```json\n"
-                "{\"decision\":\"select_columns\",\"columns\":[\"column_name\"],\"reason\":\"only this column is requested\"}\n"
-                "```\n"
-                "or\n"
-                "SchemaDecision:\n"
-                "```json\n"
-                "{\"decision\":\"reject\",\"reason\":\"candidate does not answer the question\"}\n"
-                "```"
-            )
 
         remaining_steps = self.config.max_steps - step_index + 1
         instructions: list[str] = []
@@ -1063,7 +714,6 @@ class ReActAgent:
     def run(self, task: PublicTask) -> AgentRunResult:
         state = AgentRuntimeState()
         fallback_answer: AnswerTable | None = None
-        pending_candidate: PendingCandidate | None = None
         consecutive_parse_errors = 0
         for step_index in range(1, self.config.max_steps + 1):
             try:
@@ -1077,7 +727,6 @@ class ReActAgent:
                             step_index=step_index,
                             state=state,
                             fallback_answer=fallback_answer,
-                            pending_candidate=pending_candidate,
                             consecutive_parse_errors=consecutive_parse_errors,
                         ),
                     )
@@ -1132,151 +781,6 @@ class ReActAgent:
                 continue
 
             consecutive_parse_errors = 0
-            if pending_candidate is not None:
-                if model_step.action != SCHEMA_DECISION_ACTION:
-                    observation = {
-                        "ok": False,
-                        "error": (
-                            "A schema decision is required before continuing. "
-                            "Return `SchemaDecision:` with accept, select_columns, or reject."
-                        ),
-                        "candidate_preview": _answer_preview(pending_candidate.answer, max_rows=5),
-                    }
-                    self._append_step(
-                        task,
-                        state,
-                        StepRecord(
-                            step_index=step_index,
-                            thought=model_step.thought,
-                            action="__error__",
-                            action_input={},
-                            raw_response=raw_response,
-                            observation=observation,
-                            ok=False,
-                        )
-                    )
-                    continue
-
-                try:
-                    schema_decision = _parse_schema_decision_payload(
-                        model_step.action_input,
-                        pending_candidate,
-                    )
-                    if schema_decision.decision == "reject":
-                        observation = {
-                            "ok": True,
-                            "tool": SCHEMA_DECISION_ACTION,
-                            "content": {
-                                "decision": schema_decision.decision,
-                                "reason": schema_decision.reason,
-                                "next_action": (
-                                    "Candidate rejected by semantic schema validation. "
-                                    "Recompute or print a corrected FINAL_TABLE_JSON."
-                                ),
-                            },
-                        }
-                        self._append_step(
-                            task,
-                            state,
-                            StepRecord(
-                                step_index=step_index,
-                                thought=model_step.thought,
-                                action=model_step.action,
-                                action_input=model_step.action_input,
-                                raw_response=raw_response,
-                                observation=observation,
-                                ok=True,
-                            )
-                        )
-                        pending_candidate = None
-                        fallback_answer = None
-                        continue
-
-                    projected_answer = _project_answer_table(
-                        pending_candidate.answer,
-                        schema_decision.columns,
-                    )
-                    if _has_audit_reason(pending_candidate.reasons):
-                        fallback_answer = projected_answer
-                        observation = {
-                            "ok": True,
-                            "tool": SCHEMA_DECISION_ACTION,
-                            "content": {
-                                "decision": schema_decision.decision,
-                                "selected_columns": list(schema_decision.columns),
-                                "reason": schema_decision.reason,
-                                "candidate_preview": _answer_preview(projected_answer, max_rows=5),
-                                "next_action": (
-                                    "Schema accepted, but runtime still requires calculation audit. "
-                                    "Run a focused verification and print FINAL_AUDIT_JSON plus FINAL_TABLE_JSON."
-                                ),
-                            },
-                        }
-                        self._append_step(
-                            task,
-                            state,
-                            StepRecord(
-                                step_index=step_index,
-                                thought=model_step.thought,
-                                action=model_step.action,
-                                action_input=model_step.action_input,
-                                raw_response=raw_response,
-                                observation=observation,
-                                ok=True,
-                            )
-                        )
-                        pending_candidate = None
-                        continue
-
-                    state.answer = projected_answer
-                    observation = {
-                        "ok": True,
-                        "tool": SCHEMA_DECISION_ACTION,
-                        "content": {
-                            "decision": schema_decision.decision,
-                            "selected_columns": list(schema_decision.columns),
-                            "reason": schema_decision.reason,
-                            "final_preview": _answer_preview(state.answer, max_rows=5),
-                        },
-                    }
-                    self._append_step(
-                        task,
-                        state,
-                        StepRecord(
-                            step_index=step_index,
-                            thought=model_step.thought,
-                            action=model_step.action,
-                            action_input=model_step.action_input,
-                            raw_response=raw_response,
-                            observation=observation,
-                            ok=True,
-                        )
-                    )
-                    break
-                except Exception as exc:
-                    observation = {
-                        "ok": False,
-                        "error": str(exc),
-                        "recovery_instruction": (
-                            "Return a valid SchemaDecision using only candidate column names."
-                        ),
-                        "candidate_preview": _answer_preview(pending_candidate.answer, max_rows=5),
-                    }
-                    self._append_step(
-                        task,
-                        state,
-                        StepRecord(
-                            step_index=step_index,
-                            thought=model_step.thought,
-                            action="__error__",
-                            action_input=model_step.action_input,
-                            raw_response=raw_response,
-                            observation=observation,
-                            ok=False,
-                        )
-                    )
-                    continue
-
             try:
                 model_step = self._sanitize_model_step(task, model_step)
                 if (
@@ -1313,34 +817,6 @@ class ReActAgent:
                 candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
                     decision = _candidate_decision_from_observation(task, observation, candidate_answer)
-                    blocking_reasons = [
-                        reason
-                        for reason in decision.reasons
-                        if reason
-                        in {
-                            "python_traceback_present",
-                            "question_expects_rows_but_candidate_is_empty",
-                            "single_value_question_requires_one_cell_answer",
-                        }
-                    ]
-                    audit_payload = _audit_payload_from_observation(observation)
-                    content["final_table_json_decision"] = {
-                        "auto_submit": decision.auto_submit,
-                        "store_as_fallback": decision.store_as_fallback,
-                        "reasons": list(decision.reasons),
-                        "blocking_reasons": blocking_reasons,
-                        "candidate_preview": _answer_preview(decision.answer),
-                        "audit_present": audit_payload is not None,
-                        "audit_preview": audit_payload,
-                        "next_action": (
-                            "Runtime accepted this FINAL_TABLE_JSON as the final answer."
-                            if decision.auto_submit
-                            else (
-                                "Runtime did not auto-submit this candidate because of blocking issues. "
-                                "Fix the listed blocking reasons, then print a corrected FINAL_TABLE_JSON or submit Answer."
-                            )
-                        ),
-                    }
                     self._checkpoint(
                         task,
                         state,
