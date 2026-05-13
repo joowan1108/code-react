@@ -58,6 +58,16 @@ FINAL_RESULT_MARKERS = (
     "ANSWER_CANDIDATE:",
 )
 
+FINAL_AUDIT_MARKERS = (
+    "FINAL_AUDIT_JSON:",
+    "AUDIT_JSON:",
+)
+
+AUDIT_REASON_PREFIXES = (
+    "calculation_audit",
+    "audit_",
+)
+
 
 def _strip_json_fence(raw_response: str) -> str:
     text = raw_response.strip()
@@ -375,6 +385,123 @@ def _stdout_mentions_tie_check(stdout: str) -> bool:
     )
 
 
+def _contains_any(text: str, needles: set[str]) -> bool:
+    lowered = text.lower()
+    return any(needle in lowered for needle in needles)
+
+
+def _question_requires_calculation_audit(question: str) -> bool:
+    q = question.lower()
+    tokens = _split_identifier_tokens(question)
+    risky_tokens = {
+        "average",
+        "avg",
+        "mean",
+        "count",
+        "distinct",
+        "unique",
+        "percentage",
+        "percent",
+        "ratio",
+        "proportion",
+        "total",
+        "sum",
+        "more",
+        "less",
+        "most",
+        "least",
+        "highest",
+        "lowest",
+        "maximum",
+        "minimum",
+        "top",
+        "last",
+        "latest",
+        "first",
+        "list",
+        "all",
+        "which",
+        "between",
+        "before",
+        "after",
+        "monthly",
+        "yearly",
+    }
+    risky_phrases = (
+        "how many",
+        "how much",
+        "what percentage",
+        "how many times",
+        "more than",
+        "less than",
+        "at least",
+        "at most",
+        "greater than",
+        "lower than",
+        "during ",
+    )
+    return bool(tokens & risky_tokens) or any(phrase in q for phrase in risky_phrases)
+
+
+def _flatten_audit_text(value: object) -> str:
+    if isinstance(value, dict):
+        return " ".join(f"{key} {_flatten_audit_text(child)}" for key, child in value.items())
+    if isinstance(value, list):
+        return " ".join(_flatten_audit_text(item) for item in value)
+    return str(value)
+
+
+def _audit_validation_reasons(task: PublicTask, audit: dict[str, object] | None) -> tuple[str, ...]:
+    if not _question_requires_calculation_audit(task.question):
+        return ()
+
+    if audit is None:
+        return ("calculation_audit_required",)
+
+    reasons: list[str] = []
+    q = task.question.lower()
+    tokens = _split_identifier_tokens(task.question)
+    audit_text = _flatten_audit_text(audit).lower()
+
+    if tokens & {"percentage", "percent", "ratio", "proportion"} or "how many times" in q:
+        if not _contains_any(audit_text, {"numerator", "denominator", "divide", "ratio", "percentage"}):
+            reasons.append("audit_missing_numerator_denominator")
+
+    if tokens & {"average", "avg", "mean"}:
+        if not _contains_any(audit_text, {"average", "avg", "mean", "sum", "count"}):
+            reasons.append("audit_missing_average_basis")
+
+    if tokens & {"count", "many", "number"} or "how many" in q:
+        if not _contains_any(audit_text, {"count", "row_count", "rows", "distinct", "unique"}):
+            reasons.append("audit_missing_count_basis")
+
+    if tokens & {"distinct", "unique", "different"}:
+        if not _contains_any(audit_text, {"distinct", "unique", "dedup", "duplicate"}):
+            reasons.append("audit_missing_distinct_check")
+
+    if "monthly" in tokens or "per month" in q:
+        if not _contains_any(audit_text, {"monthly", "month", "/ 12", "divide by 12", "divided by 12"}):
+            reasons.append("audit_missing_monthly_unit_conversion")
+
+    if _question_requires_tie_check(task.question):
+        if not _contains_any(audit_text, {"tie", "ties", "all matching", "all rows", "rank", "sort"}):
+            reasons.append("audit_missing_tie_check")
+
+    if _question_expects_nonempty_rows(task.question):
+        if not _contains_any(audit_text, {"filter", "condition", "row_count", "rows", "result_count"}):
+            reasons.append("audit_missing_filter_trace")
+
+    if tokens & {"last", "latest", "recent", "first"}:
+        if not _contains_any(audit_text, {"last", "latest", "first", "sort", "order", "date", "time"}):
+            reasons.append("audit_missing_ordering_check")
+
+    return tuple(reasons)
+
+
+def _has_audit_reason(reasons: tuple[str, ...]) -> bool:
+    return any(reason.startswith(AUDIT_REASON_PREFIXES) for reason in reasons)
+
+
 def _normalize_answer_cell(value: object) -> object:
     if not isinstance(value, str):
         return value
@@ -490,6 +617,39 @@ def _answer_preview(answer: AnswerTable, *, max_rows: int = 3) -> dict[str, obje
     }
 
 
+def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, object] | None:
+    lower_text = text.lower()
+    marker_positions = [
+        lower_text.find(marker.lower())
+        for marker in markers
+        if lower_text.find(marker.lower()) >= 0
+    ]
+    if not marker_positions:
+        return None
+    try:
+        return _load_first_json_object(text[min(marker_positions) :])
+    except ValueError:
+        return None
+
+
+def _audit_payload_from_observation(observation: dict[str, object]) -> dict[str, object] | None:
+    if observation.get("tool") != "execute_python":
+        return None
+    content = observation.get("content")
+    if not isinstance(content, dict):
+        return None
+    stdout = str(content.get("output") or content.get("stdout") or "")
+    return _find_marker_payload(stdout, FINAL_AUDIT_MARKERS)
+
+
+def _latest_audit_payload_from_steps(steps: list[StepRecord]) -> dict[str, object] | None:
+    for step in reversed(steps):
+        audit = _audit_payload_from_observation(step.observation)
+        if audit is not None:
+            return audit
+    return None
+
+
 def _candidate_decision_from_observation(
     task: PublicTask,
     observation: dict[str, object],
@@ -524,6 +684,9 @@ def _candidate_decision_from_observation(
     if len(answer.columns) > 3 and not _question_is_single_value(task.question):
         reasons.append("candidate_has_many_columns_verify_exact_schema")
 
+    audit = _audit_payload_from_observation(observation)
+    reasons.extend(_audit_validation_reasons(task, audit))
+
     store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
     return CandidateAnswerDecision(
         answer=answer,
@@ -539,6 +702,10 @@ def _find_final_marker_segment(text: str, max_chars: int) -> str | None:
     lower_text = text.lower()
     best_index: int | None = None
     for marker in FINAL_RESULT_MARKERS:
+        index = lower_text.find(marker.lower())
+        if index >= 0 and (best_index is None or index < best_index):
+            best_index = index
+    for marker in FINAL_AUDIT_MARKERS:
         index = lower_text.find(marker.lower())
         if index >= 0 and (best_index is None or index < best_index):
             best_index = index
@@ -826,17 +993,8 @@ class ReActAgent:
         if not isinstance(content, dict):
             return None
         stdout = str(content.get("output") or content.get("stdout") or "")
-        marker_positions = [
-            stdout.lower().find(marker.lower())
-            for marker in FINAL_RESULT_MARKERS
-            if stdout.lower().find(marker.lower()) >= 0
-        ]
-        if not marker_positions:
-            return None
-        candidate_text = stdout[min(marker_positions) :]
-        try:
-            payload = _load_first_json_object(candidate_text)
-        except ValueError:
+        payload = _find_marker_payload(stdout, FINAL_RESULT_MARKERS)
+        if payload is None:
             return None
 
         answer = _answer_table_from_payload(payload)
@@ -981,10 +1139,41 @@ class ReActAgent:
                         fallback_answer = None
                         continue
 
-                    state.answer = _project_answer_table(
+                    projected_answer = _project_answer_table(
                         pending_candidate.answer,
                         schema_decision.columns,
                     )
+                    if _has_audit_reason(pending_candidate.reasons):
+                        fallback_answer = projected_answer
+                        observation = {
+                            "ok": True,
+                            "tool": SCHEMA_DECISION_ACTION,
+                            "content": {
+                                "decision": schema_decision.decision,
+                                "selected_columns": list(schema_decision.columns),
+                                "reason": schema_decision.reason,
+                                "candidate_preview": _answer_preview(projected_answer, max_rows=5),
+                                "next_action": (
+                                    "Schema accepted, but runtime still requires calculation audit. "
+                                    "Run a focused verification and print FINAL_AUDIT_JSON plus FINAL_TABLE_JSON."
+                                ),
+                            },
+                        }
+                        state.steps.append(
+                            StepRecord(
+                                step_index=step_index,
+                                thought=model_step.thought,
+                                action=model_step.action,
+                                action_input=model_step.action_input,
+                                raw_response=raw_response,
+                                observation=observation,
+                                ok=True,
+                            )
+                        )
+                        pending_candidate = None
+                        continue
+
+                    state.answer = projected_answer
                     observation = {
                         "ok": True,
                         "tool": SCHEMA_DECISION_ACTION,
@@ -1038,10 +1227,12 @@ class ReActAgent:
                     answer = _answer_table_from_payload(model_step.action_input)
                     if answer is not None:
                         answer = _normalize_answer_table(answer)
+                        answer_audit = _latest_audit_payload_from_steps(state.steps)
+                        answer_audit_reasons = _audit_validation_reasons(task, answer_audit)
                         if _answer_needs_schema_validation(task, answer):
                             pending_candidate = PendingCandidate(
                                 answer=answer,
-                                reasons=("schema_validation_required",),
+                                reasons=("schema_validation_required", *answer_audit_reasons),
                                 source_step_index=step_index,
                             )
                             fallback_answer = answer
@@ -1050,6 +1241,8 @@ class ReActAgent:
                                 "tool": "runtime_schema_review",
                                 "content": {
                                     "candidate_preview": _answer_preview(answer, max_rows=5),
+                                    "audit_present": answer_audit is not None,
+                                    "audit_reasons": list(answer_audit_reasons),
                                     "next_action": (
                                         "Return SchemaDecision next. Accept this schema, select only "
                                         "semantically requested columns, or reject the candidate."
@@ -1061,6 +1254,33 @@ class ReActAgent:
                                     step_index=step_index,
                                     thought=model_step.thought,
                                     action="__schema_review__",
+                                    action_input=answer.to_dict(),
+                                    raw_response=raw_response,
+                                    observation=observation,
+                                    ok=True,
+                                )
+                            )
+                            continue
+                        if answer_audit_reasons:
+                            fallback_answer = answer
+                            observation = {
+                                "ok": True,
+                                "tool": "runtime_audit_review",
+                                "content": {
+                                    "candidate_preview": _answer_preview(answer, max_rows=5),
+                                    "audit_present": answer_audit is not None,
+                                    "audit_reasons": list(answer_audit_reasons),
+                                    "next_action": (
+                                        "Runtime needs calculation audit before direct Answer. "
+                                        "Run focused verification and print FINAL_AUDIT_JSON plus FINAL_TABLE_JSON."
+                                    ),
+                                },
+                            }
+                            state.steps.append(
+                                StepRecord(
+                                    step_index=step_index,
+                                    thought=model_step.thought,
+                                    action="__audit_review__",
                                     action_input=answer.to_dict(),
                                     raw_response=raw_response,
                                     observation=observation,
@@ -1094,11 +1314,19 @@ class ReActAgent:
                         and "python_traceback_present" not in decision.reasons
                         and bool(decision.answer.rows)
                     )
+                    requires_audit_validation = (
+                        _has_audit_reason(decision.reasons)
+                        and "python_traceback_present" not in decision.reasons
+                        and bool(decision.answer.rows)
+                    )
+                    audit_payload = _audit_payload_from_observation(observation)
                     content["final_table_json_decision"] = {
                         "auto_submit": decision.auto_submit,
                         "store_as_fallback": decision.store_as_fallback,
                         "reasons": list(decision.reasons),
                         "candidate_preview": _answer_preview(decision.answer),
+                        "audit_present": audit_payload is not None,
+                        "audit_preview": audit_payload,
                         "next_action": (
                             "Runtime accepted this FINAL_TABLE_JSON as the final answer."
                             if decision.auto_submit
@@ -1107,8 +1335,13 @@ class ReActAgent:
                                 "to accept, select requested columns, or reject this candidate."
                                 if requires_schema_validation
                                 else (
-                                    "Runtime did not auto-submit this candidate. Fix the listed issues, "
-                                    "verify all filters/ties/schema, then print a corrected FINAL_TABLE_JSON or submit Answer."
+                                    "Runtime requires calculation audit next. Run focused verification and print "
+                                    "FINAL_AUDIT_JSON plus a corrected FINAL_TABLE_JSON."
+                                    if requires_audit_validation
+                                    else (
+                                        "Runtime did not auto-submit this candidate. Fix the listed issues, "
+                                        "verify all filters/ties/schema, then print a corrected FINAL_TABLE_JSON or submit Answer."
+                                    )
                                 )
                             )
                         ),

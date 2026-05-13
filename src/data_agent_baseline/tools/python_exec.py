@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import contextlib
+import csv
 import io
+import json
+import math
 import multiprocessing
 import os
+import re
+import sqlite3
 import sys
 import tempfile
 import traceback
 from pathlib import Path
 from typing import Any
+
+try:
+    import pandas as pd
+except Exception:  # noqa: BLE001
+    pd = None
 
 
 @contextlib.contextmanager
@@ -82,6 +92,14 @@ def _run_python_code(
     namespace: dict[str, Any] = {
         "__builtins__": __builtins__,
         "__name__": "__main__",
+        "csv": csv,
+        "json": json,
+        "math": math,
+        "os": os,
+        "pd": pd,
+        "re": re,
+        "sqlite3": sqlite3,
+        "sys": sys,
         "context_root": str(resolved_context_root),
         "CONTEXT_ROOT": str(resolved_context_root),
         "work_dir": str(resolved_working_dir),

@@ -36,10 +36,11 @@ Operational rules:
 7. Keep Python output concise: print shapes, columns, small samples, and candidate rows, not full files or full dataframes.
 8. Print `FINAL_TABLE_JSON:` only when the JSON is the exact final answer table to submit.
 9. Never use `FINAL_TABLE_JSON:` for samples, previews, intermediate candidates, or debug output.
-10. Before finalizing, verify all filters, joins, distinct entity counts, units, and whether min/max/top answers have ties.
+10. For nontrivial computations, print `FINAL_AUDIT_JSON:` immediately before `FINAL_TABLE_JSON:` with filters, joins, row counts, aggregation formulas, distinct handling, unit conversions, and tie/order checks.
 11. If the question asks to list/all/which rows, include every matching row, not only the first one.
 12. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 13. If the runtime asks for semantic schema validation, do not run code; return only `SchemaDecision`.
+14. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -97,6 +98,15 @@ import pandas as pd
 data = pd.read_csv("csv/relevant_table.csv")
 answer = data.groupby("category", as_index=False)["revenue"].sum()
 answer = answer.rename(columns={"revenue": "total_revenue"})
+audit = {
+    "filters": [],
+    "row_counts": {"input": len(data), "result": len(answer)},
+    "aggregation": "sum revenue by category",
+    "distinct_handling": "not required",
+    "tie_or_order_check": "not required",
+}
+print("FINAL_AUDIT_JSON:")
+print(json.dumps(audit))
 print("FINAL_TABLE_JSON:")
 print(json.dumps({"columns": answer.columns.tolist(), "rows": answer.values.tolist()}))
 ```
@@ -126,9 +136,11 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "If the previous observation contains a plausible final result, your next step should be `Answer`, "
             "not more exploration. When printing final rows from Python, prefix them with `FINAL_TABLE_JSON:`. "
             "`FINAL_TABLE_JSON:` is only for the exact final answer table, never for previews or samples. "
+            "For nontrivial computations, print `FINAL_AUDIT_JSON:` immediately before `FINAL_TABLE_JSON:`. "
             "For lowest/highest/min/max/top questions, verify ties and include all tied rows. "
             "For count questions, verify whether the counted entity should be distinct. "
             "For average monthly/yearly questions, verify unit conversion before finalizing. "
+            "For SQLite files, rely on the manifest's sqlite_master and PRAGMA schema before writing joins. "
             "If asked for semantic schema validation, answer with `SchemaDecision:` only. "
             "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
         )
@@ -156,8 +168,12 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "Do not spend the first step listing files again. "
             "Use it to choose a focused Python computation or a compact targeted inspection. "
             "All file paths are relative to the task context directory. "
+            "For SQLite files, the manifest includes sqlite_master plus PRAGMA table_info/foreign_key_list details; "
+            "use those exact table and column names for joins. "
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
             "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
+            "For any answer involving filters, joins, counts, averages, sums, percentages, ratios, min/max/top, "
+            "last/first ordering, or unit conversion, also print `FINAL_AUDIT_JSON:` immediately before it. "
             "The final answer should contain only the columns requested by the question. "
             "Before finalizing, check ties for min/max/top wording, include all matching rows for list/all wording, "
             "and check distinct counts or monthly/yearly unit conversions when relevant."
@@ -182,5 +198,6 @@ def build_observation_prompt(observation: dict[str, object] | str) -> str:
         f"Observation:\n{rendered}\n\n"
         "Next-step reminder: if this observation is enough to build the requested table, submit `Answer` now. "
         "Final columns must exactly match the question and should not include helper columns. "
-        "If a runtime candidate was rejected, fix the listed reason before printing `FINAL_TABLE_JSON` again."
+        "If a runtime candidate was rejected or audit was required, fix the listed reason before printing "
+        "`FINAL_AUDIT_JSON` and `FINAL_TABLE_JSON` again."
     )

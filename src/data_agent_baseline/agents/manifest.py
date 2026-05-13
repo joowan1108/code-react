@@ -6,10 +6,12 @@ import re
 import sqlite3
 from pathlib import Path
 
-MAX_MANIFEST_CHARS = 5000
+MAX_MANIFEST_CHARS = 8000
 MAX_FILES = 80
 MAX_COLUMNS = 28
 MAX_TABLES = 20
+MAX_FOREIGN_KEYS = 20
+MAX_CREATE_SQL_CHARS = 500
 MAX_JSON_PARSE_BYTES = 8_000_000
 
 
@@ -37,6 +39,10 @@ def _trim_items(items: list[str], *, max_items: int = MAX_COLUMNS) -> str:
         return ", ".join(items)
     kept = items[:max_items]
     return f"{', '.join(kept)}, ... (+{len(items) - len(kept)} more)"
+
+
+def _quote_sqlite_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def _csv_manifest(path: Path, root: Path) -> str:
@@ -131,28 +137,62 @@ def _json_manifest(path: Path, root: Path) -> str:
 
 def _sqlite_manifest(path: Path, root: Path) -> list[str]:
     rel_path = _relative_path(path, root)
-    lines = [f"- {rel_path} [sqlite, {_format_size(path)}]"]
+    lines = [f"- {rel_path} [sqlite, {_format_size(path)}]: schema from sqlite_master + PRAGMA table_info/foreign_key_list"]
     try:
         connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
     except Exception as exc:  # noqa: BLE001
         return [f"{lines[0]}: unreadable ({exc})"]
 
     try:
-        tables = [
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            ).fetchall()
-        ]
-        for table in tables[:MAX_TABLES]:
-            quoted_table = '"' + table.replace('"', '""') + '"'
-            columns = [
-                str(row[1])
-                for row in connection.execute(f"PRAGMA table_info({quoted_table})").fetchall()
-            ]
-            lines.append(f"  - {table}: columns={_trim_items(columns)}")
-        if len(tables) > MAX_TABLES:
-            lines.append(f"  - ... (+{len(tables) - MAX_TABLES} more tables)")
+        table_rows = connection.execute(
+            """
+            SELECT name, sql
+            FROM sqlite_master
+            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            """
+        ).fetchall()
+        for table, create_sql in table_rows[:MAX_TABLES]:
+            table = str(table)
+            quoted_table = _quote_sqlite_identifier(table)
+            column_specs: list[str] = []
+            for row in connection.execute(f"PRAGMA table_info({quoted_table})").fetchall():
+                _, name, column_type, notnull, default_value, pk = row
+                spec = str(name)
+                if column_type:
+                    spec += f" {column_type}"
+                flags: list[str] = []
+                if pk:
+                    flags.append("pk")
+                if notnull:
+                    flags.append("notnull")
+                if default_value is not None:
+                    flags.append(f"default={default_value}")
+                if flags:
+                    spec += f" ({';'.join(flags)})"
+                column_specs.append(spec)
+            lines.append(f"  - table {table}: columns={_trim_items(column_specs)}")
+
+            foreign_key_specs: list[str] = []
+            for row in connection.execute(f"PRAGMA foreign_key_list({quoted_table})").fetchall():
+                _, _, ref_table, from_column, to_column, on_update, on_delete, _ = row
+                behavior = []
+                if on_update and str(on_update).upper() != "NO ACTION":
+                    behavior.append(f"on_update={on_update}")
+                if on_delete and str(on_delete).upper() != "NO ACTION":
+                    behavior.append(f"on_delete={on_delete}")
+                suffix = f" ({';'.join(behavior)})" if behavior else ""
+                foreign_key_specs.append(f"{from_column}->{ref_table}.{to_column}{suffix}")
+            if foreign_key_specs:
+                lines.append(f"    foreign_keys={_trim_items(foreign_key_specs, max_items=MAX_FOREIGN_KEYS)}")
+
+            if isinstance(create_sql, str) and create_sql:
+                compact_sql = " ".join(create_sql.split())
+                if len(compact_sql) > MAX_CREATE_SQL_CHARS:
+                    compact_sql = compact_sql[:MAX_CREATE_SQL_CHARS] + "..."
+                lines.append(f"    create_sql={compact_sql}")
+        if len(table_rows) > MAX_TABLES:
+            lines.append(f"  - ... (+{len(table_rows) - MAX_TABLES} more tables)")
     except Exception as exc:  # noqa: BLE001
         lines.append(f"  - schema unreadable ({exc})")
     finally:
