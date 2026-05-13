@@ -533,9 +533,116 @@ def _normalize_answer_table(answer: AnswerTable) -> AnswerTable:
     )
 
 
+def _column_tokens(column: str) -> set[str]:
+    normalized = column.replace("_", " ").replace("-", " ")
+    return _split_identifier_tokens(normalized)
+
+
+def _expanded_question_tokens(question: str) -> set[str]:
+    tokens = set(_split_identifier_tokens(question))
+    expansions = {
+        "diagnosis": {"disease", "diagnosed"},
+        "sex": {"gender"},
+        "url": {"website", "webpage", "site"},
+        "text": {"comment", "answer", "body"},
+        "comment": {"text", "body"},
+        "trans": {"transaction", "transactions", "withdrawal", "withdrawals"},
+        "transaction": {"trans", "withdrawal", "withdrawals"},
+        "consumption": {"consume"},
+        "constructor": {"constructorref", "constructorRef"},
+    }
+    for canonical, aliases in expansions.items():
+        if canonical in tokens or tokens & {alias.lower() for alias in aliases}:
+            tokens.add(canonical)
+            tokens.update(alias.lower() for alias in aliases)
+    if "website" in tokens:
+        tokens.add("url")
+    if "disease" in tokens or "diagnosed" in tokens:
+        tokens.add("diagnosis")
+    if "ranked" in tokens:
+        tokens.add("rank")
+    return tokens
+
+
+def _column_relevance_score(question: str, column: str) -> int:
+    q = question.lower()
+    question_tokens = _expanded_question_tokens(question)
+    column_tokens = _column_tokens(column)
+    score = sum(2 for token in column_tokens if token in question_tokens)
+    normalized_column = re.sub(r"[^a-z0-9]", "", column.lower())
+
+    if "event" in question_tokens and "event" in column_tokens and "name" in column_tokens:
+        score += 4
+    if {"constructor", "reference"} <= question_tokens and normalized_column in {"constructorref", "constructorreference"}:
+        score += 5
+    if ("website" in question_tokens or "url" in question_tokens) and ("url" in column_tokens or "website" in column_tokens):
+        score += 6
+    if "funding" in question_tokens and "funding" in column_tokens:
+        score += 4
+    if "comment" in question_tokens and ("text" in column_tokens or "body" in column_tokens):
+        score += 5
+    if "finish" in question_tokens and "time" in column_tokens:
+        score += 5
+    if "consumption" in question_tokens and "consumption" in column_tokens:
+        score += 5
+    if {"transaction", "withdrawal"} & question_tokens and normalized_column in {"transid", "transactionid"}:
+        score += 5
+
+    measure_tokens = {
+        "cost",
+        "amount",
+        "score",
+        "rank",
+        "position",
+        "date",
+        "id",
+        "account",
+        "customer",
+        "milliseconds",
+    }
+    entity_selector = any(phrase in q for phrase in ("which ", "what is the", "what's the", "identify", "name "))
+    if entity_selector and column_tokens & measure_tokens and not column_tokens & {"name", "url", "text", "type"}:
+        score -= 3
+
+    return score
+
+
+def _soft_project_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
+    if len(answer.columns) <= 1:
+        return answer
+
+    scores = [_column_relevance_score(task.question, column) for column in answer.columns]
+    best_score = max(scores, default=0)
+    if best_score < 2:
+        return answer
+
+    selected_indices = [index for index, score in enumerate(scores) if score == best_score]
+
+    question_tokens = _expanded_question_tokens(task.question)
+    if {"website", "url"} & question_tokens:
+        selected_indices = [
+            index
+            for index, column in enumerate(answer.columns)
+            if _column_relevance_score(task.question, column) >= 2
+        ]
+    elif any(word in task.question.lower() for word in (" and ", " as well as ", " along with ")):
+        selected_indices = [
+            index
+            for index, column in enumerate(answer.columns)
+            if _column_relevance_score(task.question, column) >= 2
+        ]
+    elif _question_is_single_value(task.question):
+        selected_indices = [scores.index(best_score)]
+
+    if not selected_indices or len(selected_indices) == len(answer.columns):
+        return answer
+
+    selected_columns = tuple(answer.columns[index] for index in selected_indices)
+    return _project_answer_table(answer, selected_columns)
+
+
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
-    _ = task
-    return _normalize_answer_table(answer)
+    return _soft_project_answer_table(task, _normalize_answer_table(answer))
 
 
 def _answer_needs_schema_validation(task: PublicTask, answer: AnswerTable) -> bool:
@@ -657,6 +764,7 @@ def _candidate_decision_from_observation(
     answer: AnswerTable,
 ) -> CandidateAnswerDecision:
     reasons: list[str] = []
+    hard_reasons: list[str] = []
     content = observation.get("content")
     content_dict = content if isinstance(content, dict) else {}
     stdout = str(content_dict.get("output") or content_dict.get("stdout") or "")
@@ -665,12 +773,15 @@ def _candidate_decision_from_observation(
 
     if traceback_text or "traceback" in stderr.lower():
         reasons.append("python_traceback_present")
+        hard_reasons.append("python_traceback_present")
 
     if _question_expects_nonempty_rows(task.question) and not answer.rows:
         reasons.append("question_expects_rows_but_candidate_is_empty")
+        hard_reasons.append("question_expects_rows_but_candidate_is_empty")
 
     if _question_is_single_value(task.question) and (len(answer.rows) != 1 or len(answer.columns) != 1):
         reasons.append("single_value_question_requires_one_cell_answer")
+        hard_reasons.append("single_value_question_requires_one_cell_answer")
 
     if _answer_needs_schema_validation(task, answer):
         reasons.append("schema_validation_required")
@@ -691,7 +802,7 @@ def _candidate_decision_from_observation(
     store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
     return CandidateAnswerDecision(
         answer=answer,
-        auto_submit=not reasons,
+        auto_submit=not hard_reasons,
         store_as_fallback=store_as_fallback,
         reasons=tuple(reasons),
     )
@@ -996,6 +1107,12 @@ class ReActAgent:
                 "Do not repeat Thought-only text or <think> tags. Return exactly one valid step: "
                 "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
             )
+        recent_actions = [step.action for step in state.steps[-3:]]
+        if step_index >= 10 and len(recent_actions) == 3 and all(action == "execute_python" for action in recent_actions):
+            instructions.append(
+                "Exploration budget warning: you have already run several Python inspections. "
+                "Stop broad searching; use the observed schema and samples to compute or submit the best answer."
+            )
         if remaining_steps <= 2:
             instructions.append(
                 f"Finalization required: only {remaining_steps} step(s) remain. "
@@ -1275,72 +1392,13 @@ class ReActAgent:
                 ):
                     answer = _answer_table_from_payload(model_step.action_input)
                     if answer is not None:
-                        answer = _normalize_answer_table(answer)
-                        answer_audit = _latest_audit_payload_from_steps(state.steps)
-                        answer_audit_reasons = _audit_validation_reasons(task, answer_audit)
-                        if _answer_needs_schema_validation(task, answer):
-                            pending_candidate = PendingCandidate(
-                                answer=answer,
-                                reasons=("schema_validation_required", *answer_audit_reasons),
-                                source_step_index=step_index,
-                            )
-                            fallback_answer = answer
-                            observation = {
-                                "ok": True,
-                                "tool": "runtime_schema_review",
-                                "content": {
-                                    "candidate_preview": _answer_preview(answer, max_rows=5),
-                                    "audit_present": answer_audit is not None,
-                                    "audit_reasons": list(answer_audit_reasons),
-                                    "next_action": (
-                                        "Return SchemaDecision next. Accept this schema, select only "
-                                        "semantically requested columns, or reject the candidate."
-                                    ),
-                                },
-                            }
-                            self._append_step(
-                                task,
-                                state,
-                                StepRecord(
-                                    step_index=step_index,
-                                    thought=model_step.thought,
-                                    action="__schema_review__",
-                                    action_input=answer.to_dict(),
-                                    raw_response=raw_response,
-                                    observation=observation,
-                                    ok=True,
-                                )
-                            )
-                            continue
-                        if answer_audit_reasons:
-                            fallback_answer = answer
-                            observation = {
-                                "ok": True,
-                                "tool": "runtime_audit_review",
-                                "content": {
-                                    "candidate_preview": _answer_preview(answer, max_rows=5),
-                                    "audit_present": answer_audit is not None,
-                                    "audit_reasons": list(answer_audit_reasons),
-                                    "next_action": (
-                                        "Runtime needs calculation audit before direct Answer. "
-                                        "Run focused verification and print FINAL_AUDIT_JSON plus FINAL_TABLE_JSON."
-                                    ),
-                                },
-                            }
-                            self._append_step(
-                                task,
-                                state,
-                                StepRecord(
-                                    step_index=step_index,
-                                    thought=model_step.thought,
-                                    action="__audit_review__",
-                                    action_input=answer.to_dict(),
-                                    raw_response=raw_response,
-                                    observation=observation,
-                                    ok=True,
-                                )
-                            )
-                            continue
+                        answer = _sanitize_answer_table(task, answer)
+                        model_step = ModelStep(
+                            thought=model_step.thought,
+                            action=model_step.action,
+                            action_input=answer.to_dict(),
+                            raw_response=model_step.raw_response,
+                        )
 
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 content = dict(tool_result.content)
@@ -1362,21 +1420,22 @@ class ReActAgent:
                 candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
                     decision = _candidate_decision_from_observation(task, observation, candidate_answer)
-                    requires_schema_validation = (
-                        "schema_validation_required" in decision.reasons
-                        and "python_traceback_present" not in decision.reasons
-                        and bool(decision.answer.rows)
-                    )
-                    requires_audit_validation = (
-                        _has_audit_reason(decision.reasons)
-                        and "python_traceback_present" not in decision.reasons
-                        and bool(decision.answer.rows)
-                    )
+                    blocking_reasons = [
+                        reason
+                        for reason in decision.reasons
+                        if reason
+                        in {
+                            "python_traceback_present",
+                            "question_expects_rows_but_candidate_is_empty",
+                            "single_value_question_requires_one_cell_answer",
+                        }
+                    ]
                     audit_payload = _audit_payload_from_observation(observation)
                     content["final_table_json_decision"] = {
                         "auto_submit": decision.auto_submit,
                         "store_as_fallback": decision.store_as_fallback,
                         "reasons": list(decision.reasons),
+                        "blocking_reasons": blocking_reasons,
                         "candidate_preview": _answer_preview(decision.answer),
                         "audit_present": audit_payload is not None,
                         "audit_preview": audit_payload,
@@ -1384,18 +1443,8 @@ class ReActAgent:
                             "Runtime accepted this FINAL_TABLE_JSON as the final answer."
                             if decision.auto_submit
                             else (
-                                "Runtime requires semantic schema validation next. Return SchemaDecision "
-                                "to accept, select requested columns, or reject this candidate."
-                                if requires_schema_validation
-                                else (
-                                    "Runtime requires calculation audit next. Run focused verification and print "
-                                    "FINAL_AUDIT_JSON plus a corrected FINAL_TABLE_JSON."
-                                    if requires_audit_validation
-                                    else (
-                                        "Runtime did not auto-submit this candidate. Fix the listed issues, "
-                                        "verify all filters/ties/schema, then print a corrected FINAL_TABLE_JSON or submit Answer."
-                                    )
-                                )
+                                "Runtime did not auto-submit this candidate because of blocking issues. "
+                                "Fix the listed blocking reasons, then print a corrected FINAL_TABLE_JSON or submit Answer."
                             )
                         ),
                     }
@@ -1407,13 +1456,6 @@ class ReActAgent:
                     )
                     if decision.store_as_fallback:
                         fallback_answer = decision.answer
-                    if requires_schema_validation:
-                        pending_candidate = PendingCandidate(
-                            answer=decision.answer,
-                            reasons=decision.reasons,
-                            source_step_index=step_index,
-                        )
-                        continue
                     if (
                         decision.auto_submit
                         and

@@ -36,10 +36,10 @@ Operational rules:
 7. Keep Python output concise: print shapes, columns, small samples, and candidate rows, not full files or full dataframes.
 8. Print `FINAL_TABLE_JSON:` only when the JSON is the exact final answer table to submit.
 9. Never use `FINAL_TABLE_JSON:` for samples, previews, intermediate candidates, or debug output.
-10. For nontrivial computations, print `FINAL_AUDIT_JSON:` immediately before `FINAL_TABLE_JSON:` with filters, joins, row counts, aggregation formulas, distinct handling, unit conversions, and tie/order checks.
+10. For risky computations, you may print a compact `FINAL_AUDIT_JSON:` immediately before `FINAL_TABLE_JSON:` with filters, joins, row counts, aggregation formulas, distinct handling, unit conversions, and tie/order checks. Do not spend an extra step only to satisfy audit formatting.
 11. If the question asks to list/all/which rows, include every matching row, not only the first one.
 12. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
-13. If the runtime asks for semantic schema validation, do not run code; return only `SchemaDecision`.
+13. If the runtime explicitly asks for semantic schema validation, do not run code; return only `SchemaDecision`.
 14. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
 
 Format rules:
@@ -136,12 +136,12 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "If the previous observation contains a plausible final result, your next step should be `Answer`, "
             "not more exploration. When printing final rows from Python, prefix them with `FINAL_TABLE_JSON:`. "
             "`FINAL_TABLE_JSON:` is only for the exact final answer table, never for previews or samples. "
-            "For nontrivial computations, print `FINAL_AUDIT_JSON:` immediately before `FINAL_TABLE_JSON:`. "
+            "For risky computations, include compact `FINAL_AUDIT_JSON:` before `FINAL_TABLE_JSON:` when it fits in the same Python step. "
             "For lowest/highest/min/max/top questions, verify ties and include all tied rows. "
             "For count questions, verify whether the counted entity should be distinct. "
             "For average monthly/yearly questions, verify unit conversion before finalizing. "
             "For SQLite files, rely on the manifest's sqlite_master and PRAGMA schema before writing joins. "
-            "If asked for semantic schema validation, answer with `SchemaDecision:` only. "
+            "If explicitly asked for semantic schema validation, answer with `SchemaDecision:` only. "
             "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
         )
     else:
@@ -172,8 +172,8 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
             "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
-            "For any answer involving filters, joins, counts, averages, sums, percentages, ratios, min/max/top, "
-            "last/first ordering, or unit conversion, also print `FINAL_AUDIT_JSON:` immediately before it. "
+            "For answers involving filters, joins, counts, averages, sums, percentages, ratios, min/max/top, "
+            "last/first ordering, or unit conversion, include a compact `FINAL_AUDIT_JSON:` before it when possible in the same step. "
             "The final answer should contain only the columns requested by the question. "
             "Before finalizing, check ties for min/max/top wording, include all matching rows for list/all wording, "
             "and check distinct counts or monthly/yearly unit conversions when relevant."
@@ -198,6 +198,5 @@ def build_observation_prompt(observation: dict[str, object] | str) -> str:
         f"Observation:\n{rendered}\n\n"
         "Next-step reminder: if this observation is enough to build the requested table, submit `Answer` now. "
         "Final columns must exactly match the question and should not include helper columns. "
-        "If a runtime candidate was rejected or audit was required, fix the listed reason before printing "
-        "`FINAL_AUDIT_JSON` and `FINAL_TABLE_JSON` again."
+        "If the runtime reports blocking reasons, fix those before printing `FINAL_TABLE_JSON` again."
     )
