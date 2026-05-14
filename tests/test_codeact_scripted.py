@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -166,15 +167,46 @@ def test_context_manifest_summarizes_structured_files() -> None:
             ),
             encoding="utf-8",
         )
+        sqlite_path = context_path / "club.sqlite"
+        connection = sqlite3.connect(sqlite_path)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE member (
+                    member_id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL DEFAULT 'unknown',
+                    major TEXT
+                );
+                CREATE TABLE attendance (
+                    member_id INTEGER NOT NULL,
+                    event_id INTEGER NOT NULL,
+                    FOREIGN KEY(member_id) REFERENCES member(member_id)
+                );
+                INSERT INTO member VALUES (1, 'Ada', 'CS');
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
 
         manifest = build_context_manifest(context_path)
         assert "Concise context manifest" in manifest
         assert "csv/members.csv" in manifest
         assert "member_id, name, major" in manifest
+        assert "Ada" not in manifest
         assert "json/events.json" in manifest
         assert "table=event" in manifest
         assert "event_id, event_name, cost" in manifest
+        assert "Talk" not in manifest
         assert "knowledge.md" in manifest
+        assert "Details" not in manifest
+        assert "club.sqlite" in manifest
+        assert "table member" in manifest
+        assert "member_id INTEGER (pk)" in manifest
+        assert "name TEXT (notnull)" in manifest
+        assert "foreign_keys=member_id->member.member_id" in manifest
+        assert "create_sql=" not in manifest
+        assert "default=unknown" not in manifest
 
 
 def test_codeact_scripted_task_11() -> None:

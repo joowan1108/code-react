@@ -11,7 +11,6 @@ MAX_FILES = 80
 MAX_COLUMNS = 28
 MAX_TABLES = 20
 MAX_FOREIGN_KEYS = 20
-MAX_CREATE_SQL_CHARS = 500
 MAX_JSON_PARSE_BYTES = 8_000_000
 
 
@@ -100,7 +99,7 @@ def _json_manifest_from_prefix(path: Path, root: Path) -> str:
     if table:
         parts.append(f"table={table}")
     if columns:
-        parts.append(f"observed_keys={_trim_items(columns)}")
+        parts.append(f"columns={_trim_items(columns)}")
     return ": ".join([parts[0], "; ".join(parts[1:])]) if len(parts) > 1 else parts[0]
 
 
@@ -146,18 +145,19 @@ def _sqlite_manifest(path: Path, root: Path) -> list[str]:
     try:
         table_rows = connection.execute(
             """
-            SELECT name, sql
+            SELECT name
             FROM sqlite_master
             WHERE type='table' AND name NOT LIKE 'sqlite_%'
             ORDER BY name
             """
         ).fetchall()
-        for table, create_sql in table_rows[:MAX_TABLES]:
+        for (table,) in table_rows[:MAX_TABLES]:
             table = str(table)
             quoted_table = _quote_sqlite_identifier(table)
             column_specs: list[str] = []
             for row in connection.execute(f"PRAGMA table_info({quoted_table})").fetchall():
                 _, name, column_type, notnull, default_value, pk = row
+                _ = default_value
                 spec = str(name)
                 if column_type:
                     spec += f" {column_type}"
@@ -166,8 +166,6 @@ def _sqlite_manifest(path: Path, root: Path) -> list[str]:
                     flags.append("pk")
                 if notnull:
                     flags.append("notnull")
-                if default_value is not None:
-                    flags.append(f"default={default_value}")
                 if flags:
                     spec += f" ({';'.join(flags)})"
                 column_specs.append(spec)
@@ -186,11 +184,6 @@ def _sqlite_manifest(path: Path, root: Path) -> list[str]:
             if foreign_key_specs:
                 lines.append(f"    foreign_keys={_trim_items(foreign_key_specs, max_items=MAX_FOREIGN_KEYS)}")
 
-            if isinstance(create_sql, str) and create_sql:
-                compact_sql = " ".join(create_sql.split())
-                if len(compact_sql) > MAX_CREATE_SQL_CHARS:
-                    compact_sql = compact_sql[:MAX_CREATE_SQL_CHARS] + "..."
-                lines.append(f"    create_sql={compact_sql}")
         if len(table_rows) > MAX_TABLES:
             lines.append(f"  - ... (+{len(table_rows) - MAX_TABLES} more tables)")
     except Exception as exc:  # noqa: BLE001
