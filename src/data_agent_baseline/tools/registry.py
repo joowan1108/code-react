@@ -82,6 +82,7 @@ def _execute_python(
         context_root=task.context_dir,
         code=code,
         timeout_seconds=timeout_seconds,
+        question=task.question,
     )
     return ToolExecutionResult(ok=bool(content.get("success")), content=content)
 

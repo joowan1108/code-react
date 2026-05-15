@@ -15,7 +15,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from data_agent_baseline.tools.schema_graph import inspect_context_schema
+from data_agent_baseline.tools.knowledge import retrieve_knowledge_snippets
 
 try:
     import pandas as pd
@@ -84,6 +84,7 @@ def _read_captured_stream(path: Path) -> str:
 def _run_python_code(
     context_root: str,
     working_dir: str,
+    question: str,
     code: str,
     stdout_path: str,
     stderr_path: str,
@@ -104,11 +105,14 @@ def _run_python_code(
         "sys": sys,
         "context_root": str(resolved_context_root),
         "CONTEXT_ROOT": str(resolved_context_root),
+        "task_question": question,
+        "QUESTION": question,
         "work_dir": str(resolved_working_dir),
         "WORK_DIR": str(resolved_working_dir),
         "Path": Path,
-        "inspect_context_schema": lambda **kwargs: inspect_context_schema(
+        "retrieve_knowledge": lambda **kwargs: retrieve_knowledge_snippets(
             resolved_context_root,
+            question,
             **kwargs,
         ),
     }
@@ -137,6 +141,7 @@ def execute_python_code(
     *,
     timeout_seconds: int = 30,
     working_dir: Path | None = None,
+    question: str = "",
 ) -> dict[str, Any]:
     resolved_context_root = context_root.resolve()
     resolved_working_dir = (working_dir or context_root).resolve()
@@ -152,6 +157,7 @@ def execute_python_code(
             args=(
                 resolved_context_root.as_posix(),
                 resolved_working_dir.as_posix(),
+                question,
                 code,
                 stdout_path.as_posix(),
                 stderr_path.as_posix(),
