@@ -654,13 +654,6 @@ class ReActAgent:
                 "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
             )
         recent_actions = [step.action for step in state.steps[-3:]]
-        if (
-            step_index >= max(3, int(self.config.max_steps * 0.7))
-            and remaining_steps > 2
-        ):
-            instructions.append(
-                "Pacing reminder: prefer computing a candidate answer over broad exploration."
-            )
         if step_index >= 10 and len(recent_actions) == 3 and all(action == "execute_python" for action in recent_actions):
             instructions.append(
                 "Exploration budget warning: you have already run several Python inspections. "
@@ -668,14 +661,14 @@ class ReActAgent:
             )
         if remaining_steps <= 2:
             instructions.append(
-                f"Finalization required: only {remaining_steps} step(s) remain. "
-                "Stop broad exploration. Prefer submitting the best exact answer now. "
+                f"Finalization window: only {remaining_steps} step(s) remain. "
+                "If the evidence is sufficient, submit the best exact answer now. "
                 "Use only the requested columns, include all tied/all matching rows, and check units such as monthly vs yearly."
             )
             if remaining_steps == 1:
                 instructions.append(
-                    "This is the last step. Do not perform another exploratory inspection. "
-                    "Submit `Answer` now unless a single short Python action can print `FINAL_TABLE_JSON` directly."
+                    "This is the last step. Submit `Answer` if possible; otherwise use one short Python action only if it can "
+                    "print `FINAL_TABLE_JSON` directly."
                 )
         if fallback_answer is not None and remaining_steps <= 2:
             instructions.append(

@@ -171,7 +171,8 @@ def test_runtime_instruction_reports_remaining_steps() -> None:
         )
         assert instruction is not None
         assert "Progress: step 5/16, 12 step(s) remain." in instruction
-        assert "Finalization required" not in instruction
+        assert "Pacing reminder" not in instruction
+        assert "Finalization window" not in instruction
 
         late_instruction = agent._build_runtime_instruction(
             task=task,
@@ -182,7 +183,7 @@ def test_runtime_instruction_reports_remaining_steps() -> None:
         )
         assert late_instruction is not None
         assert "Progress: step 15/16, 2 step(s) remain." in late_instruction
-        assert "Finalization required" in late_instruction
+        assert "Finalization window" in late_instruction
     finally:
         temp_context.cleanup()
 
