@@ -274,8 +274,8 @@ def test_context_manifest_adds_question_linked_schema_hints() -> None:
         assert "Question-linked schema hints" in manifest
         assert "csv/patients.csv:Creatinine" in manifest
         assert "csv/patients.csv:Age" in manifest
-        assert "knowledge snippets" in manifest
-        assert "abnormal above 1.3" in manifest
+        assert "knowledge snippets" not in manifest
+        assert "abnormal above 1.3" not in manifest
 
 
 def test_context_manifest_links_quoted_values_to_columns() -> None:

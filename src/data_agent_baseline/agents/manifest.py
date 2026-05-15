@@ -18,7 +18,6 @@ MAX_HINT_COLUMNS = 8
 MAX_HINT_TABLES = 5
 MAX_HINT_VALUES = 4
 MAX_HINT_JOINS = 4
-MAX_HINT_KNOWLEDGE = 2
 MAX_VALUE_SCAN_ROWS = 5000
 
 STOPWORDS = {
@@ -63,15 +62,22 @@ TOKEN_SYNONYMS = {
     "age": {"year", "years", "old"},
     "amount": {"budget", "cost", "expense", "price", "spend"},
     "budget": {"amount", "cost", "expense", "price"},
+    "comic": {"comics"},
+    "comics": {"comic"},
     "cost": {"amount", "budget", "expense", "price"},
     "event": {"meeting"},
+    "heroes": {"hero", "superhero"},
+    "hero": {"heroes", "superhero"},
     "meeting": {"event"},
     "percent": {"percentage", "proportion", "rate", "ratio"},
     "percentage": {"percent", "proportion", "rate", "ratio"},
     "price": {"amount", "budget", "cost"},
+    "published": {"publisher"},
+    "publisher": {"published"},
     "ratio": {"percentage", "proportion", "rate"},
     "revenue": {"amount", "sales", "total"},
     "size": {"shirt", "tshirt", "t-shirt"},
+    "superhero": {"hero", "heroes"},
     "total": {"amount", "sum"},
 }
 
@@ -487,17 +493,6 @@ def _find_value_matches(root: Path, files: list[Path], info: _SchemaInfo, values
     return matches[:MAX_HINT_VALUES]
 
 
-def _knowledge_hint_snippets(root: Path, question: str) -> list[dict[str, object]]:
-    try:
-        from data_agent_baseline.tools.knowledge import retrieve_knowledge_snippets
-    except Exception:  # noqa: BLE001
-        return []
-    try:
-        return retrieve_knowledge_snippets(root, question, top_k=MAX_HINT_KNOWLEDGE, max_chars=240)
-    except Exception:  # noqa: BLE001
-        return []
-
-
 def _overlap_join_edges(info: _SchemaInfo, top_tables: set[str]) -> list[_JoinEdge]:
     grouped: dict[str, list[_ColumnRef]] = {}
     for ref in info.columns:
@@ -536,24 +531,11 @@ def _question_linked_schema_hints(root: Path, files: list[Path], question: str |
     for _, ref in value_matches:
         scores[ref] = scores.get(ref, 0.0) + 6.0
 
-    knowledge_snippets = _knowledge_hint_snippets(root, question)
-    for snippet in knowledge_snippets:
-        snippet_terms = set()
-        for key in ("matched_schema_terms", "snippet"):
-            value = snippet.get(key)
-            if isinstance(value, list):
-                snippet_terms.update(_tokenize_for_linking(" ".join(str(item) for item in value)))
-            elif isinstance(value, str):
-                snippet_terms.update(_tokenize_for_linking(value))
-        for ref in info.columns:
-            if snippet_terms & (set(ref.tokens) | set(ref.table_tokens)):
-                scores[ref] = scores.get(ref, 0.0) + 1.5
-
     ranked_columns = sorted(
         [ref for ref, score in scores.items() if score > 0],
         key=lambda ref: (-scores[ref], ref.label),
     )[:MAX_HINT_COLUMNS]
-    if not ranked_columns and not knowledge_snippets:
+    if not ranked_columns:
         return []
 
     table_scores: dict[str, float] = {}
@@ -583,12 +565,6 @@ def _question_linked_schema_hints(root: Path, files: list[Path], question: str |
         lines.append(f"- quoted value matches: {_trim_items(rendered_values, max_items=MAX_HINT_VALUES)}")
     if join_edges:
         lines.append(f"- possible joins: {_trim_items([edge.label for edge in join_edges], max_items=MAX_HINT_JOINS)}")
-    if knowledge_snippets:
-        lines.append("- knowledge snippets:")
-        for snippet in knowledge_snippets[:MAX_HINT_KNOWLEDGE]:
-            text = " ".join(str(snippet.get("snippet", "")).split())
-            path = str(snippet.get("path", "knowledge.md"))
-            lines.append(f"  - {path}: {text}")
 
     rendered = "\n".join(lines)
     if len(rendered) <= MAX_SCHEMA_HINT_CHARS:
