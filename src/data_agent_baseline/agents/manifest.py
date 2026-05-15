@@ -4,6 +4,7 @@ import csv
 import json
 import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 MAX_MANIFEST_CHARS = 8000
@@ -12,6 +13,109 @@ MAX_COLUMNS = 28
 MAX_TABLES = 20
 MAX_FOREIGN_KEYS = 20
 MAX_JSON_PARSE_BYTES = 8_000_000
+MAX_SCHEMA_HINT_CHARS = 1000
+MAX_HINT_COLUMNS = 8
+MAX_HINT_TABLES = 5
+MAX_HINT_VALUES = 4
+MAX_HINT_JOINS = 4
+MAX_HINT_KNOWLEDGE = 2
+MAX_VALUE_SCAN_ROWS = 5000
+
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "how",
+    "in",
+    "is",
+    "it",
+    "its",
+    "many",
+    "of",
+    "on",
+    "or",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "to",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "with",
+}
+
+TOKEN_SYNONYMS = {
+    "age": {"year", "years", "old"},
+    "amount": {"budget", "cost", "expense", "price", "spend"},
+    "budget": {"amount", "cost", "expense", "price"},
+    "cost": {"amount", "budget", "expense", "price"},
+    "event": {"meeting"},
+    "meeting": {"event"},
+    "percent": {"percentage", "proportion", "rate", "ratio"},
+    "percentage": {"percent", "proportion", "rate", "ratio"},
+    "price": {"amount", "budget", "cost"},
+    "ratio": {"percentage", "proportion", "rate"},
+    "revenue": {"amount", "sales", "total"},
+    "size": {"shirt", "tshirt", "t-shirt"},
+    "total": {"amount", "sum"},
+}
+
+NUMERIC_INTENT_TERMS = {
+    "age",
+    "amount",
+    "average",
+    "avg",
+    "budget",
+    "cost",
+    "count",
+    "expense",
+    "height",
+    "many",
+    "mean",
+    "number",
+    "percent",
+    "percentage",
+    "price",
+    "proportion",
+    "rate",
+    "ratio",
+    "sum",
+    "times",
+    "total",
+    "weight",
+}
+
+NUMERIC_COLUMN_TERMS = {
+    "age",
+    "amount",
+    "budget",
+    "cost",
+    "count",
+    "height",
+    "id",
+    "number",
+    "price",
+    "score",
+    "size",
+    "total",
+    "value",
+    "weight",
+}
 
 
 def _relative_path(path: Path, root: Path) -> str:
@@ -42,6 +146,455 @@ def _trim_items(items: list[str], *, max_items: int = MAX_COLUMNS) -> str:
 
 def _quote_sqlite_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
+
+
+@dataclass(frozen=True)
+class _ColumnRef:
+    label: str
+    table_label: str
+    column: str
+    kind: str
+    rel_path: str
+    tokens: frozenset[str]
+    table_tokens: frozenset[str]
+    is_numeric: bool = False
+
+
+@dataclass(frozen=True)
+class _JoinEdge:
+    label: str
+    left_table: str
+    right_table: str
+
+
+@dataclass
+class _SchemaInfo:
+    columns: list[_ColumnRef]
+    join_edges: list[_JoinEdge]
+    lookup: dict[tuple[str, str, str, str], _ColumnRef]
+
+
+def _tokenize_for_linking(text: str) -> set[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(text))
+    tokens = {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z0-9]+", spaced.replace("_", " "))
+        if token and token.casefold() not in STOPWORDS
+    }
+    expanded: set[str] = set()
+    for token in tokens:
+        expanded.add(token)
+        if len(token) > 3 and token.endswith("s"):
+            expanded.add(token[:-1])
+        expanded.update(TOKEN_SYNONYMS.get(token, set()))
+    return expanded
+
+
+def _question_terms(question: str) -> set[str]:
+    terms = _tokenize_for_linking(question)
+    lowered = question.casefold()
+    if "how many" in lowered:
+        terms.update({"count", "number"})
+    if "how much" in lowered:
+        terms.update({"amount", "total"})
+    if re.search(r"\b\d+\b", lowered) and any(marker in lowered for marker in ("age", "old", "year", "yet")):
+        terms.add("age")
+    if any(phrase in lowered for phrase in ("times more", "how many times", "ratio", "percentage")):
+        terms.update({"ratio", "percentage"})
+    for phrase in _quoted_values(question):
+        terms.update(_tokenize_for_linking(phrase))
+    return terms
+
+
+def _quoted_values(question: str) -> list[str]:
+    values: list[str] = []
+    for match in re.finditer(r'"([^"]+)"|\'([^\']+)\'', question):
+        value = match.group(1) or match.group(2)
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _column_label(kind: str, rel_path: str, table_label: str, column: str) -> str:
+    if kind == "sqlite":
+        return f"{table_label}.{column}"
+    if kind == "json" and table_label != rel_path:
+        return f"{table_label}.{column} ({rel_path})"
+    return f"{rel_path}:{column}"
+
+
+def _is_numeric_column(column: str, column_type: str | None = None) -> bool:
+    column_tokens = _tokenize_for_linking(column)
+    if column_tokens & NUMERIC_COLUMN_TERMS:
+        return True
+    if column_type and re.search(r"int|real|numeric|decimal|double|float", column_type, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+def _make_column_ref(
+    *,
+    kind: str,
+    rel_path: str,
+    table_label: str,
+    column: str,
+    column_type: str | None = None,
+) -> _ColumnRef:
+    return _ColumnRef(
+        label=_column_label(kind, rel_path, table_label, column),
+        table_label=table_label,
+        column=column,
+        kind=kind,
+        rel_path=rel_path,
+        tokens=frozenset(_tokenize_for_linking(column)),
+        table_tokens=frozenset(_tokenize_for_linking(table_label) | _tokenize_for_linking(rel_path)),
+        is_numeric=_is_numeric_column(column, column_type),
+    )
+
+
+def _add_column_ref(
+    info: _SchemaInfo,
+    *,
+    kind: str,
+    rel_path: str,
+    table_label: str,
+    column: str,
+    column_type: str | None = None,
+) -> None:
+    ref = _make_column_ref(
+        kind=kind,
+        rel_path=rel_path,
+        table_label=table_label,
+        column=column,
+        column_type=column_type,
+    )
+    info.columns.append(ref)
+    info.lookup[(kind, rel_path, table_label, column)] = ref
+
+
+def _schema_info_for_hints(root: Path, files: list[Path]) -> _SchemaInfo:
+    info = _SchemaInfo(columns=[], join_edges=[], lookup={})
+    for path in files[:MAX_FILES]:
+        suffix = path.suffix.casefold()
+        rel_path = _relative_path(path, root)
+        if suffix == ".csv":
+            try:
+                with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+                    columns = next(csv.reader(handle), [])
+            except Exception:  # noqa: BLE001
+                continue
+            for column in columns:
+                _add_column_ref(
+                    info,
+                    kind="csv",
+                    rel_path=rel_path,
+                    table_label=rel_path,
+                    column=str(column),
+                )
+        elif suffix == ".json":
+            try:
+                if path.stat().st_size > MAX_JSON_PARSE_BYTES:
+                    text = path.read_text(encoding="utf-8", errors="replace")[:200_000]
+                    table_match = re.search(r'"table"\s*:\s*"([^"]+)"', text)
+                    table_label = table_match.group(1) if table_match else rel_path
+                    columns = [
+                        key
+                        for key in re.findall(r'"([^"]+)"\s*:', text)
+                        if key not in {"table", "records"}
+                    ]
+                else:
+                    data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+                    table_label = str(data.get("table")) if isinstance(data, dict) and data.get("table") else rel_path
+                    if isinstance(data, dict):
+                        _, columns = _json_columns_from_records(data.get("records"))
+                        if not columns:
+                            columns = [str(key) for key in data.keys()]
+                    elif isinstance(data, list):
+                        _, columns = _json_columns_from_records(data)
+                    else:
+                        columns = []
+            except Exception:  # noqa: BLE001
+                continue
+            seen: set[str] = set()
+            for column in columns:
+                column = str(column)
+                if column in seen:
+                    continue
+                seen.add(column)
+                _add_column_ref(
+                    info,
+                    kind="json",
+                    rel_path=rel_path,
+                    table_label=table_label,
+                    column=column,
+                )
+        elif suffix in {".sqlite", ".sqlite3", ".db"}:
+            try:
+                connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                table_rows = connection.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name
+                    """
+                ).fetchall()
+                for (table_name,) in table_rows[:MAX_TABLES]:
+                    table = str(table_name)
+                    quoted_table = _quote_sqlite_identifier(table)
+                    for row in connection.execute(f"PRAGMA table_info({quoted_table})").fetchall():
+                        _, name, column_type, *_ = row
+                        _add_column_ref(
+                            info,
+                            kind="sqlite",
+                            rel_path=rel_path,
+                            table_label=table,
+                            column=str(name),
+                            column_type=str(column_type or ""),
+                        )
+                    for row in connection.execute(f"PRAGMA foreign_key_list({quoted_table})").fetchall():
+                        _, _, ref_table, from_column, to_column, *_ = row
+                        info.join_edges.append(
+                            _JoinEdge(
+                                label=f"{table}.{from_column}->{ref_table}.{to_column}",
+                                left_table=table,
+                                right_table=str(ref_table),
+                            )
+                        )
+            except Exception:  # noqa: BLE001
+                continue
+            finally:
+                connection.close()
+    return info
+
+
+def _score_column(ref: _ColumnRef, question: str, query_terms: set[str]) -> float:
+    score = 0.0
+    column_overlap = query_terms & set(ref.tokens)
+    table_overlap = query_terms & set(ref.table_tokens)
+    score += 3.0 * len(column_overlap)
+    score += 1.0 * len(table_overlap)
+    column_name = ref.column.casefold()
+    table_name = ref.table_label.casefold()
+    if len(column_name) > 2 and re.search(rf"\b{re.escape(column_name)}\b", question.casefold()):
+        score += 3.0
+    if len(table_name) > 2 and re.search(rf"\b{re.escape(table_name)}\b", question.casefold()):
+        score += 1.5
+    if ref.is_numeric and (query_terms & NUMERIC_INTENT_TERMS):
+        score += 1.0
+    if "count" in query_terms and ("id" in ref.tokens or ref.column.casefold().endswith("_id")):
+        score += 0.5
+    return score
+
+
+def _find_value_matches(root: Path, files: list[Path], info: _SchemaInfo, values: list[str]) -> list[tuple[str, _ColumnRef]]:
+    if not values:
+        return []
+    lowered_values = [(value, value.casefold()) for value in values]
+    matches: list[tuple[str, _ColumnRef]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(value: str, ref: _ColumnRef | None) -> None:
+        if ref is None:
+            return
+        key = (value, ref.label)
+        if key in seen:
+            return
+        seen.add(key)
+        matches.append((value, ref))
+
+    for path in files[:MAX_FILES]:
+        suffix = path.suffix.casefold()
+        rel_path = _relative_path(path, root)
+        if suffix == ".csv":
+            try:
+                with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+                    reader = csv.reader(handle)
+                    columns = [str(column) for column in next(reader, [])]
+                    for row_index, row in enumerate(reader):
+                        if row_index >= MAX_VALUE_SCAN_ROWS:
+                            break
+                        for column, cell in zip(columns, row, strict=False):
+                            cell_text = str(cell).casefold()
+                            for value, lowered in lowered_values:
+                                if lowered in cell_text:
+                                    add(value, info.lookup.get(("csv", rel_path, rel_path, column)))
+            except Exception:  # noqa: BLE001
+                continue
+        elif suffix == ".json":
+            try:
+                if path.stat().st_size > MAX_JSON_PARSE_BYTES:
+                    continue
+                data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            except Exception:  # noqa: BLE001
+                continue
+            table_label = str(data.get("table")) if isinstance(data, dict) and data.get("table") else rel_path
+            records: list[object]
+            if isinstance(data, dict) and isinstance(data.get("records"), list):
+                records = data["records"]
+            elif isinstance(data, list):
+                records = data
+            else:
+                records = [data]
+            for record in records[:MAX_VALUE_SCAN_ROWS]:
+                if not isinstance(record, dict):
+                    continue
+                for column, cell in record.items():
+                    cell_text = str(cell).casefold()
+                    for value, lowered in lowered_values:
+                        if lowered in cell_text:
+                            add(value, info.lookup.get(("json", rel_path, table_label, str(column))))
+        elif suffix in {".sqlite", ".sqlite3", ".db"}:
+            try:
+                connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                tables = connection.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name
+                    """
+                ).fetchall()
+                for (table_name,) in tables[:MAX_TABLES]:
+                    table = str(table_name)
+                    quoted_table = _quote_sqlite_identifier(table)
+                    column_rows = connection.execute(f"PRAGMA table_info({quoted_table})").fetchall()
+                    for row in column_rows:
+                        column = str(row[1])
+                        quoted_column = _quote_sqlite_identifier(column)
+                        for value, lowered in lowered_values:
+                            pattern = f"%{lowered.replace('%', '').replace('_', '')}%"
+                            try:
+                                hit = connection.execute(
+                                    f"SELECT 1 FROM {quoted_table} "
+                                    f"WHERE lower(CAST({quoted_column} AS TEXT)) LIKE ? LIMIT 1",
+                                    (pattern,),
+                                ).fetchone()
+                            except Exception:  # noqa: BLE001
+                                hit = None
+                            if hit:
+                                add(value, info.lookup.get(("sqlite", rel_path, table, column)))
+            except Exception:  # noqa: BLE001
+                continue
+            finally:
+                connection.close()
+    return matches[:MAX_HINT_VALUES]
+
+
+def _knowledge_hint_snippets(root: Path, question: str) -> list[dict[str, object]]:
+    try:
+        from data_agent_baseline.tools.knowledge import retrieve_knowledge_snippets
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        return retrieve_knowledge_snippets(root, question, top_k=MAX_HINT_KNOWLEDGE, max_chars=240)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _overlap_join_edges(info: _SchemaInfo, top_tables: set[str]) -> list[_JoinEdge]:
+    grouped: dict[str, list[_ColumnRef]] = {}
+    for ref in info.columns:
+        if ref.table_label in top_tables:
+            grouped.setdefault(ref.column.casefold(), []).append(ref)
+    edges: list[_JoinEdge] = []
+    seen: set[str] = set()
+    for column, refs in grouped.items():
+        if len(refs) < 2 or ("id" not in _tokenize_for_linking(column) and not column.endswith("_id")):
+            continue
+        for left in refs[:3]:
+            for right in refs[:3]:
+                if left.table_label >= right.table_label:
+                    continue
+                label = f"{left.table_label}.{left.column}~={right.table_label}.{right.column}"
+                if label in seen:
+                    continue
+                seen.add(label)
+                edges.append(_JoinEdge(label=label, left_table=left.table_label, right_table=right.table_label))
+    return edges
+
+
+def _question_linked_schema_hints(root: Path, files: list[Path], question: str | None) -> list[str]:
+    if not question:
+        return []
+    query_terms = _question_terms(question)
+    if not query_terms:
+        return []
+
+    info = _schema_info_for_hints(root, files)
+    if not info.columns:
+        return []
+
+    scores = {ref: _score_column(ref, question, query_terms) for ref in info.columns}
+    value_matches = _find_value_matches(root, files, info, _quoted_values(question))
+    for _, ref in value_matches:
+        scores[ref] = scores.get(ref, 0.0) + 6.0
+
+    knowledge_snippets = _knowledge_hint_snippets(root, question)
+    for snippet in knowledge_snippets:
+        snippet_terms = set()
+        for key in ("matched_schema_terms", "snippet"):
+            value = snippet.get(key)
+            if isinstance(value, list):
+                snippet_terms.update(_tokenize_for_linking(" ".join(str(item) for item in value)))
+            elif isinstance(value, str):
+                snippet_terms.update(_tokenize_for_linking(value))
+        for ref in info.columns:
+            if snippet_terms & (set(ref.tokens) | set(ref.table_tokens)):
+                scores[ref] = scores.get(ref, 0.0) + 1.5
+
+    ranked_columns = sorted(
+        [ref for ref, score in scores.items() if score > 0],
+        key=lambda ref: (-scores[ref], ref.label),
+    )[:MAX_HINT_COLUMNS]
+    if not ranked_columns and not knowledge_snippets:
+        return []
+
+    table_scores: dict[str, float] = {}
+    for ref, score in scores.items():
+        if score <= 0:
+            continue
+        table_scores[ref.table_label] = table_scores.get(ref.table_label, 0.0) + score
+    ranked_tables = [
+        table
+        for table, _ in sorted(table_scores.items(), key=lambda item: (-item[1], item[0]))[:MAX_HINT_TABLES]
+    ]
+    top_table_set = set(ranked_tables)
+    join_edges = [
+        edge
+        for edge in info.join_edges
+        if edge.left_table in top_table_set or edge.right_table in top_table_set
+    ]
+    join_edges.extend(_overlap_join_edges(info, top_table_set))
+
+    lines = ["Question-linked schema hints (orientation only; verify with data):"]
+    if ranked_tables:
+        lines.append(f"- likely tables/files: {_trim_items(ranked_tables, max_items=MAX_HINT_TABLES)}")
+    if ranked_columns:
+        lines.append(f"- likely columns: {_trim_items([ref.label for ref in ranked_columns], max_items=MAX_HINT_COLUMNS)}")
+    if value_matches:
+        rendered_values = [f'"{value}" -> {ref.label}' for value, ref in value_matches]
+        lines.append(f"- quoted value matches: {_trim_items(rendered_values, max_items=MAX_HINT_VALUES)}")
+    if join_edges:
+        lines.append(f"- possible joins: {_trim_items([edge.label for edge in join_edges], max_items=MAX_HINT_JOINS)}")
+    if knowledge_snippets:
+        lines.append("- knowledge snippets:")
+        for snippet in knowledge_snippets[:MAX_HINT_KNOWLEDGE]:
+            text = " ".join(str(snippet.get("snippet", "")).split())
+            path = str(snippet.get("path", "knowledge.md"))
+            lines.append(f"  - {path}: {text}")
+
+    rendered = "\n".join(lines)
+    if len(rendered) <= MAX_SCHEMA_HINT_CHARS:
+        return lines
+    trimmed = rendered[:MAX_SCHEMA_HINT_CHARS].rsplit("\n", 1)[0]
+    return [*trimmed.splitlines(), "[question-linked hints truncated]"]
 
 
 def _csv_manifest(path: Path, root: Path) -> str:
@@ -214,7 +767,7 @@ def _doc_manifest(path: Path, root: Path) -> str:
     return f"- {rel_path} [doc, {_format_size(path)}]"
 
 
-def build_context_manifest(context_dir: Path) -> str:
+def build_context_manifest(context_dir: Path, *, question: str | None = None) -> str:
     """Build a small schema/file manifest for the first model prompt.
 
     This is intentionally shallow: it exposes file paths and schema-like metadata
@@ -227,7 +780,7 @@ def build_context_manifest(context_dir: Path) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"- context manifest unavailable: {exc}"
 
-    lines = ["Concise context manifest:"]
+    lines = [*_question_linked_schema_hints(root, files, question), "Concise context manifest:"]
     for path in files[:MAX_FILES]:
         suffix = path.suffix.casefold()
         if suffix == ".csv":

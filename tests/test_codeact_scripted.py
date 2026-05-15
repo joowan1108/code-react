@@ -250,6 +250,53 @@ def test_context_manifest_summarizes_structured_files() -> None:
         assert "default=unknown" not in manifest
 
 
+def test_context_manifest_adds_question_linked_schema_hints() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "csv").mkdir()
+        (context_path / "csv" / "patients.csv").write_text(
+            "ID,Age,Creatinine\n1,68,1.4\n2,72,1.1\n",
+            encoding="utf-8",
+        )
+        filler = "\n\n".join(f"Unrelated paragraph {index}." for index in range(80))
+        (context_path / "knowledge.md").write_text(
+            filler
+            + "\n\n## Creatinine rule\n"
+            + "Creatinine is abnormal above 1.3 and should be interpreted as an abnormal creatinine level.",
+            encoding="utf-8",
+        )
+
+        manifest = build_context_manifest(
+            context_path,
+            question="Among patients whose creatinine level is abnormal, how many of them aren't 70 yet?",
+        )
+
+        assert "Question-linked schema hints" in manifest
+        assert "csv/patients.csv:Creatinine" in manifest
+        assert "csv/patients.csv:Age" in manifest
+        assert "knowledge snippets" in manifest
+        assert "abnormal above 1.3" in manifest
+
+
+def test_context_manifest_links_quoted_values_to_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "csv").mkdir()
+        (context_path / "csv" / "meetings.csv").write_text(
+            "event_name,amount\nYearly Kickoff,300\nOctober Meeting,110\n",
+            encoding="utf-8",
+        )
+
+        manifest = build_context_manifest(
+            context_path,
+            question='How many times was the budget for "Yearly Kickoff" more than "October Meeting"?',
+        )
+
+        assert "quoted value matches" in manifest
+        assert '"Yearly Kickoff" -> csv/meetings.csv:event_name' in manifest
+        assert "csv/meetings.csv:amount" in manifest
+
+
 def test_retrieve_knowledge_uses_full_document_and_schema_terms() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)

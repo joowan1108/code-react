@@ -39,7 +39,6 @@ Operational rules:
 10. If the question asks to list/all/which rows, include every matching row, not only the first one.
 11. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 12. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
-13. In Python, `retrieve_knowledge(top_k=5)` searches all knowledge.md files using the question plus schema column/table names; use it for domain terms, coded values, or ambiguous column meanings.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -80,13 +79,6 @@ data = pd.read_csv("csv/relevant_table.csv")
 print("columns:", data.columns.tolist())
 print("shape:", data.shape)
 print(data.head(3).to_string(index=False))
-```
-
-Example response when knowledge.md may define domain terms or coded values:
-Thought: I will retrieve only relevant knowledge snippets before mapping the question to columns and values.
-Code:
-```python
-print(retrieve_knowledge(top_k=3, max_chars=800))
 ```
 
 Example response when Python can compute the exact final table:
@@ -144,7 +136,7 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
 
 
 def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
-    context_manifest = build_context_manifest(task.context_dir)
+    context_manifest = build_context_manifest(task.context_dir, question=task.question)
     if codeact:
         return (
             f"Question: {task.question}\n"
