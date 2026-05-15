@@ -39,7 +39,8 @@ Operational rules:
 10. If the question asks to list/all/which rows, include every matching row, not only the first one.
 11. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 12. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
-13. In Python, `inspect_context_schema()` is optional for relational ambiguity; it returns compact tables, PK/FK hints, and join candidates without sample values.
+13. For multi-table CSV/JSON tasks involving joins, IDs, matching, relationships, or cross-table aggregation, consider calling `inspect_context_schema(max_join_candidates=8)` before choosing join keys.
+14. When using `inspect_context_schema()`, print only `join_candidates` or the specific table metadata you need; do not print the full schema unless necessary.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -80,6 +81,14 @@ data = pd.read_csv("csv/relevant_table.csv")
 print("columns:", data.columns.tolist())
 print("shape:", data.shape)
 print(data.head(3).to_string(index=False))
+```
+
+Example response when multiple tabular files need schema linking:
+Thought: I will inspect compact join candidates before choosing join keys.
+Code:
+```python
+schema = inspect_context_schema(max_join_candidates=8)
+print({"join_candidates": schema["join_candidates"]})
 ```
 
 Example response when Python can compute the exact final table:
