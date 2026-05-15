@@ -19,7 +19,9 @@ from data_agent_baseline.benchmark.evaluate import score_prediction_csv
 from data_agent_baseline.benchmark.schema import PublicTask, TaskAssets, TaskRecord
 from data_agent_baseline.config import AgentConfig, AppConfig, DatasetConfig, RunConfig
 from data_agent_baseline.run.runner import run_single_task
+from data_agent_baseline.tools.python_exec import execute_python_code
 from data_agent_baseline.tools.registry import ToolRegistry
+from data_agent_baseline.tools.schema_graph import inspect_context_schema
 
 
 def _json_response(payload: dict[str, object]) -> str:
@@ -207,6 +209,47 @@ def test_context_manifest_summarizes_structured_files() -> None:
         assert "foreign_keys=member_id->member.member_id" in manifest
         assert "create_sql=" not in manifest
         assert "default=unknown" not in manifest
+
+
+def test_context_schema_helper_infers_compact_join_hints() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "csv").mkdir()
+        (context_path / "csv" / "members.csv").write_text(
+            "member_id,name\n1,Ada\n2,Grace\n",
+            encoding="utf-8",
+        )
+        (context_path / "csv" / "attendance.csv").write_text(
+            "member_id,event_id\n1,e1\n2,e2\n",
+            encoding="utf-8",
+        )
+
+        schema = inspect_context_schema(context_path, max_join_candidates=5)
+        rendered = json.dumps(schema, ensure_ascii=False)
+
+        assert "members" in schema["tables"]
+        assert "attendance" in schema["tables"]
+        assert "member_id" in schema["tables"]["members"]["pk_candidates"]
+        assert any(
+            "attendance.member_id -> members.member_id" in candidate
+            for candidate in schema["join_candidates"]
+        )
+        assert "Ada" not in rendered
+        assert "Grace" not in rendered
+
+
+def test_python_namespace_exposes_optional_schema_helper() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "left.csv").write_text("id,name\n1,Ada\n", encoding="utf-8")
+        result = execute_python_code(
+            context_path,
+            "import json\nprint(json.dumps(inspect_context_schema(), sort_keys=True))",
+            timeout_seconds=10,
+        )
+        assert result["success"]
+        assert "left" in result["output"]
+        assert "Ada" not in result["output"]
 
 
 def test_codeact_scripted_task_11() -> None:

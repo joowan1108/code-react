@@ -37,3 +37,14 @@ configs/*
 # OS / notebook noise
 .DS_Store
 .ipynb_checkpoints/
+
+# Ignore all .tar.gz and compressed tarballs
+*.tar.gz
+*.tgz
+
+# Optional: Ignore other common archive formats
+*.tar
+*.gz
+*.zip
+*.7z
+*.rar

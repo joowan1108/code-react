@@ -39,6 +39,7 @@ Operational rules:
 10. If the question asks to list/all/which rows, include every matching row, not only the first one.
 11. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 12. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
+13. In Python, `inspect_context_schema()` is optional for relational ambiguity; it returns compact tables, PK/FK hints, and join candidates without sample values.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:

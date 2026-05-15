@@ -15,6 +15,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from data_agent_baseline.tools.schema_graph import inspect_context_schema
+
 try:
     import pandas as pd
 except Exception:  # noqa: BLE001
@@ -105,6 +107,10 @@ def _run_python_code(
         "work_dir": str(resolved_working_dir),
         "WORK_DIR": str(resolved_working_dir),
         "Path": Path,
+        "inspect_context_schema": lambda **kwargs: inspect_context_schema(
+            resolved_context_root,
+            **kwargs,
+        ),
     }
     resolved_stdout_path = Path(stdout_path)
     resolved_stderr_path = Path(stderr_path)
