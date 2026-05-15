@@ -8,6 +8,7 @@ from pathlib import Path
 
 from data_agent_baseline.agents.model import ScriptedModelAdapter
 from data_agent_baseline.agents.manifest import build_context_manifest
+from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT
 from data_agent_baseline.agents.react import (
     ReActAgent,
     ReActAgentConfig,
@@ -143,6 +144,45 @@ def test_prompt_history_uses_recent_steps_only() -> None:
         assert "output 2" not in joined_messages
         assert "step 3" in joined_messages
         assert "output 6" in joined_messages
+    finally:
+        temp_context.cleanup()
+
+
+def test_runtime_instruction_reports_remaining_steps() -> None:
+    temp_context = tempfile.TemporaryDirectory()
+    context_path = Path(temp_context.name)
+    task = PublicTask(
+        record=TaskRecord(task_id="task_x", difficulty="easy", question="Return x."),
+        assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+    )
+    try:
+        agent = ReActAgent(
+            model=ScriptedModelAdapter([]),
+            tools=ToolRegistry(specs={}, handlers={}),
+            config=ReActAgentConfig(max_steps=16),
+            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
+        )
+        instruction = agent._build_runtime_instruction(
+            task=task,
+            step_index=5,
+            state=AgentRuntimeState(),
+            fallback_answer=None,
+            consecutive_parse_errors=0,
+        )
+        assert instruction is not None
+        assert "Progress: step 5/16, 12 step(s) remain." in instruction
+        assert "Finalization required" not in instruction
+
+        late_instruction = agent._build_runtime_instruction(
+            task=task,
+            step_index=15,
+            state=AgentRuntimeState(),
+            fallback_answer=None,
+            consecutive_parse_errors=0,
+        )
+        assert late_instruction is not None
+        assert "Progress: step 15/16, 2 step(s) remain." in late_instruction
+        assert "Finalization required" in late_instruction
     finally:
         temp_context.cleanup()
 

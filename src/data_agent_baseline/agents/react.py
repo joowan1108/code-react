@@ -644,7 +644,9 @@ class ReActAgent:
             return None
 
         remaining_steps = self.config.max_steps - step_index + 1
-        instructions: list[str] = []
+        instructions: list[str] = [
+            f"Progress: step {step_index}/{self.config.max_steps}, {remaining_steps} step(s) remain."
+        ]
         if consecutive_parse_errors:
             instructions.append(
                 "Runtime recovery: your previous response could not be parsed. "
@@ -652,6 +654,13 @@ class ReActAgent:
                 "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
             )
         recent_actions = [step.action for step in state.steps[-3:]]
+        if (
+            step_index >= max(3, int(self.config.max_steps * 0.7))
+            and remaining_steps > 2
+        ):
+            instructions.append(
+                "Pacing reminder: prefer computing a candidate answer over broad exploration."
+            )
         if step_index >= 10 and len(recent_actions) == 3 and all(action == "execute_python" for action in recent_actions):
             instructions.append(
                 "Exploration budget warning: you have already run several Python inspections. "
@@ -673,8 +682,6 @@ class ReActAgent:
                 "A previous candidate answer is available as fallback. If it matches the question, submit it exactly:\n"
                 f"{_safe_json_dumps(_answer_preview(fallback_answer, max_rows=5))}"
             )
-        if not instructions:
-            return None
         return "\n\n".join(instructions)
 
     def _candidate_answer_from_observation(
