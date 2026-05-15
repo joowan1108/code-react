@@ -1,0 +1,25 @@
+dataset:
+  root_path: data/public/input
+
+agent:
+  strategy: codeact
+  model: qwen3.5-35b-a3b
+  api_base: "http://localhost:11434/v1"
+  api_key: ollama
+  max_steps: 16
+  temperature: 0.0
+  model_timeout_seconds: 90
+  max_output_tokens: 2048
+  python_timeout_seconds: 45
+  prompt_history_steps: 5
+  full_observation_threshold: 6000
+  observation_head_chars: 1800
+  observation_tail_chars: 1800
+  stderr_tail_chars: 4000
+  final_marker_chars: 4000
+
+run:
+  output_dir: artifacts/runs
+  run_id: example_run_id
+  max_workers: 8
+  task_timeout_seconds: 600
