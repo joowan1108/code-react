@@ -32,7 +32,6 @@ artifacts/*
 
 # Local configs
 configs/*
-!configs/react_baseline.example.yaml
 
 # OS / notebook noise
 .DS_Store
