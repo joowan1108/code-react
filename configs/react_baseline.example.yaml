@@ -11,7 +11,7 @@ agent:
   model_timeout_seconds: 90
   max_output_tokens: 2048
   python_timeout_seconds: 45
-  prompt_history_steps: 4
+  prompt_history_steps: 5
   full_observation_threshold: 6000
   observation_head_chars: 1800
   observation_tail_chars: 1800

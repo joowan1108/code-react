@@ -32,7 +32,7 @@ class AgentConfig:
     model_timeout_seconds: float = 90.0
     max_output_tokens: int | None = 2048
     python_timeout_seconds: int = 45
-    prompt_history_steps: int = 4
+    prompt_history_steps: int = 5
     full_observation_threshold: int = 6000
     observation_head_chars: int = 1800
     observation_tail_chars: int = 1800

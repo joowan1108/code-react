@@ -134,21 +134,21 @@ def test_prompt_history_uses_recent_steps_only() -> None:
         agent = ReActAgent(
             model=ScriptedModelAdapter([]),
             tools=ToolRegistry(specs={}, handlers={}),
-            config=ReActAgentConfig(prompt_history_steps=4),
+            config=ReActAgentConfig(prompt_history_steps=5),
         )
         messages = agent._build_messages(task, state)
         assistant_messages = [message.content for message in messages if message.role == "assistant"]
         joined_messages = "\n".join(message.content for message in messages)
-        assert len(assistant_messages) == 4
+        assert len(assistant_messages) == 5
         assert "step 1" not in joined_messages
-        assert "output 2" not in joined_messages
+        assert "output 2" in joined_messages
         assert "step 3" in joined_messages
         assert "output 6" in joined_messages
     finally:
         temp_context.cleanup()
 
 
-def test_runtime_instruction_reports_remaining_steps() -> None:
+def test_runtime_instruction_does_not_report_current_step() -> None:
     temp_context = tempfile.TemporaryDirectory()
     context_path = Path(temp_context.name)
     task = PublicTask(
@@ -169,21 +169,19 @@ def test_runtime_instruction_reports_remaining_steps() -> None:
             fallback_answer=None,
             consecutive_parse_errors=0,
         )
-        assert instruction is not None
-        assert "Progress: step 5/16, 12 step(s) remain." in instruction
-        assert "Pacing reminder" not in instruction
-        assert "Finalization window" not in instruction
+        assert instruction is None
 
-        late_instruction = agent._build_runtime_instruction(
+        recovery_instruction = agent._build_runtime_instruction(
             task=task,
             step_index=15,
             state=AgentRuntimeState(),
             fallback_answer=None,
-            consecutive_parse_errors=0,
+            consecutive_parse_errors=1,
         )
-        assert late_instruction is not None
-        assert "Progress: step 15/16, 2 step(s) remain." in late_instruction
-        assert "Finalization window" in late_instruction
+        assert recovery_instruction is not None
+        assert "Runtime recovery" in recovery_instruction
+        assert "Progress: step" not in recovery_instruction
+        assert "Finalization window" not in recovery_instruction
     finally:
         temp_context.cleanup()
 

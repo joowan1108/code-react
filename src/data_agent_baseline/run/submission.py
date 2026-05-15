@@ -63,7 +63,7 @@ def build_submission_config(
             model_timeout_seconds=_env_float("AGENT_MODEL_TIMEOUT_SECONDS", 90.0),
             max_output_tokens=_env_int("AGENT_MAX_OUTPUT_TOKENS", 2048),
             python_timeout_seconds=_env_int("AGENT_PYTHON_TIMEOUT_SECONDS", 45),
-            prompt_history_steps=_env_int("AGENT_PROMPT_HISTORY_STEPS", 4),
+            prompt_history_steps=_env_int("AGENT_PROMPT_HISTORY_STEPS", 5),
             full_observation_threshold=_env_int("AGENT_FULL_OBSERVATION_THRESHOLD", 6000),
             observation_head_chars=_env_int("AGENT_OBSERVATION_HEAD_CHARS", 1800),
             observation_tail_chars=_env_int("AGENT_OBSERVATION_TAIL_CHARS", 1800),
