@@ -5,6 +5,7 @@ import re
 
 from data_agent_baseline.agents.manifest import build_context_manifest
 from data_agent_baseline.benchmark.schema import PublicTask
+from data_agent_baseline.tools.knowledge import extract_ambiguity_section
 
 
 REACT_SYSTEM_PROMPT = """
@@ -107,20 +108,28 @@ Answer:
 
 KNOWLEDGE_TRIGGER_TERMS = {
     "abnormal",
+    "category",
     "classification",
     "code",
     "coded",
+    "definition",
     "diagnosis",
     "disease",
+    "format",
     "legal",
     "meaning",
+    "monthly",
     "normal",
+    "per",
     "range",
     "rule",
     "severe",
     "status",
     "threshold",
+    "type",
+    "unit",
     "warning",
+    "yearly",
 }
 
 
@@ -183,8 +192,19 @@ def _knowledge_reminder(task: PublicTask) -> str:
     )
 
 
+def _ambiguity_block(task: PublicTask) -> str:
+    try:
+        body = extract_ambiguity_section(task.context_dir)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not body:
+        return ""
+    return f"Field disambiguation from knowledge guide:\n{body}\n"
+
+
 def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
     context_manifest = build_context_manifest(task.context_dir, question=task.question)
+    ambiguity = _ambiguity_block(task)
     if codeact:
         return (
             f"Question: {task.question}\n"
@@ -197,6 +217,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
             "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
+            f"{ambiguity}"
             f"{_knowledge_reminder(task)}"
             "The final answer should contain only the columns requested by the question. "
             "Before finalizing, check ties for min/max/top wording, include all matching rows for list/all wording, "
@@ -205,6 +226,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
     return (
         f"Question: {task.question}\n"
         f"{context_manifest}\n"
+        f"{ambiguity}"
         "Use the manifest to choose focused Python inspections. "
         "Do not print whole files or full tables just to rediscover this schema. "
         "All tool file paths are relative to the task context directory. "

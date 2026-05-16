@@ -186,6 +186,24 @@ def collect_schema_query_terms(context_root: str | Path) -> list[str]:
     return deduped
 
 
+def extract_ambiguity_section(context_root: str | Path) -> str:
+    """Return the body of the Ambiguity Resolution section from knowledge.md, or ''."""
+    root = Path(context_root).resolve()
+    for kpath in sorted(root.rglob("knowledge.md")):
+        try:
+            text = kpath.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        # Split only at ## level so ### subsections stay attached to their parent
+        sections = re.split(r"\n(?=## )", text)
+        for section in sections:
+            if re.match(r"## [^\n]*ambiguity", section, re.IGNORECASE):
+                body = re.sub(r"^## [^\n]*\n", "", section).strip()
+                if body:
+                    return body
+    return ""
+
+
 def _split_knowledge_blocks(text: str) -> list[str]:
     blocks = re.split(r"\n\s*\n|(?=^#{1,6}\s)", text, flags=re.MULTILINE)
     return [block.strip() for block in blocks if block.strip()]
