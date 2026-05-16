@@ -12,6 +12,7 @@ from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT, build
 from data_agent_baseline.agents.react import (
     ReActAgent,
     ReActAgentConfig,
+    _build_planning_context,
     _render_observation_for_prompt,
     parse_model_step,
 )
@@ -184,6 +185,89 @@ def test_runtime_instruction_does_not_report_current_step() -> None:
         assert "Finalization window" not in recovery_instruction
     finally:
         temp_context.cleanup()
+
+
+def test_medium_planning_prefix_is_front_of_model_input() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_medium",
+                difficulty="medium",
+                question="Return the average score by group.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=1,
+            max_steps=16,
+        )
+        agent = ReActAgent(
+            model=ScriptedModelAdapter([]),
+            tools=ToolRegistry(specs={}, handlers={}),
+            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
+        )
+
+        messages = agent._build_messages(
+            task,
+            state,
+            front_instruction=planning_instruction,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        assert messages[0].role == "system"
+        assert messages[1].content.startswith("PLANNING PREFIX")
+        assert "schema_linking" in messages[1].content
+        assert "target_columns" in messages[1].content
+        assert "Progress: model call 1/16" in messages[1].content
+        assert "Return the average score by group." in messages[2].content
+
+
+def test_planning_snapshot_is_checkpointed_for_partial_trace() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hard",
+                difficulty="hard",
+                question="Return the requested count.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        _, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=1,
+            max_steps=16,
+        )
+        payloads: list[dict[str, object]] = []
+        agent = ReActAgent(
+            model=ScriptedModelAdapter([]),
+            tools=ToolRegistry(specs={}, handlers={}),
+            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
+            checkpoint_callback=payloads.append,
+        )
+
+        agent._checkpoint(
+            task,
+            state,
+            status="before_model_request",
+            step_index=1,
+            planning=planning_snapshot,
+        )
+
+        planning = payloads[-1]["planning"]
+        assert isinstance(planning, dict)
+        assert planning["enabled"] is True
+        assert planning["model_input_position"] == "front_after_system_before_task_prompt"
+        assert "PLANNING PREFIX" in str(planning["prompt_prefix"])
 
 
 def test_hard_rule_task_gets_conservative_knowledge_reminder() -> None:

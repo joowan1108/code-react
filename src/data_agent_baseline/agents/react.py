@@ -43,6 +43,52 @@ FINAL_RESULT_MARKERS = (
     "ANSWER_CANDIDATE:",
 )
 
+PLANNING_DIFFICULTIES = {"medium", "hard"}
+
+PLANNING_NODES = (
+    (
+        "schema_linking",
+        (),
+        "Understand the data first: inspect files/tables, schema, join keys, "
+        "markdown docs, and available columns.",
+    ),
+    (
+        "target_columns",
+        ("schema_linking",),
+        "Decide the exact requested final columns and exclude helper, filter, "
+        "sort, join, or explanation columns.",
+    ),
+    (
+        "semantic_mapping",
+        ("schema_linking", "target_columns"),
+        "Map question terms, filters, coded values, units, and quoted values "
+        "to real columns/values before heavy computation.",
+    ),
+    (
+        "load_preprocess",
+        ("semantic_mapping",),
+        "Load only needed data and normalize dates, numbers, IDs, text, nulls, "
+        "and coded values.",
+    ),
+    (
+        "join_filter",
+        ("load_preprocess",),
+        "Apply verified joins and filters using the mapped columns and values.",
+    ),
+    (
+        "aggregate_select",
+        ("join_filter",),
+        "Compute the requested rows, count, percentage, average, max/min, "
+        "ranking, or ratio.",
+    ),
+    (
+        "final_verify",
+        ("aggregate_select",),
+        "Verify ties/all rows/distinctness/units and submit exactly the final "
+        "requested columns.",
+    ),
+)
+
 
 def _strip_json_fence(raw_response: str) -> str:
     text = raw_response.strip()
@@ -545,6 +591,200 @@ def _render_observation_for_prompt(
     return _render_compact_generic_observation(observation, config, len(rendered))
 
 
+def _task_uses_planning(task: PublicTask) -> bool:
+    return task.difficulty.casefold() in PLANNING_DIFFICULTIES
+
+
+def _step_text_for_planning(step: StepRecord) -> str:
+    parts = [step.action, step.thought, step.raw_response[:1200]]
+    content = step.observation.get("content")
+    if isinstance(content, dict):
+        for key in ("output", "stdout", "stderr", "traceback"):
+            value = content.get(key)
+            if value:
+                parts.append(str(value)[:1200])
+    else:
+        error = step.observation.get("error")
+        if error:
+            parts.append(str(error)[:600])
+    return "\n".join(parts).lower()
+
+
+def _planning_completed_nodes(
+    state: AgentRuntimeState,
+    fallback_answer: AnswerTable | None,
+) -> set[str]:
+    steps = list(state.steps)
+    successful_python_steps = [
+        step for step in steps if step.action == "execute_python" and step.ok
+    ]
+    recent_text = "\n".join(_step_text_for_planning(step) for step in steps[-5:])
+    all_text = "\n".join(_step_text_for_planning(step) for step in steps)
+    has_candidate_answer = fallback_answer is not None or any(
+        marker.lower() in all_text for marker in FINAL_RESULT_MARKERS
+    )
+    has_terminal_answer = state.answer is not None or any(
+        step.action == "answer" and step.ok for step in steps
+    )
+
+    completed: set[str] = set()
+    if successful_python_steps:
+        completed.add("schema_linking")
+    if has_candidate_answer or re.search(r"\bcolumns?\b|final_table_json|answer_candidate", recent_text):
+        completed.update({"schema_linking", "target_columns"})
+    if len(successful_python_steps) >= 2 or any(
+        token in recent_text
+        for token in (
+            "unique",
+            "value_counts",
+            "sample",
+            "head(",
+            "mapping",
+            "knowledge",
+            "quoted",
+            "matched",
+            "normal range",
+            "coded",
+        )
+    ):
+        completed.update({"schema_linking", "target_columns", "semantic_mapping"})
+    if len(successful_python_steps) >= 2 or any(
+        token in recent_text
+        for token in (
+            "read_csv",
+            "read_json",
+            "sqlite3",
+            "astype",
+            "to_datetime",
+            "dropna",
+            "fillna",
+            "normalize",
+            "str.strip",
+        )
+    ):
+        completed.update({"schema_linking", "target_columns", "semantic_mapping", "load_preprocess"})
+    if any(
+        token in recent_text
+        for token in (
+            "merge(",
+            ".join(",
+            "read_sql",
+            " where ",
+            ".query(",
+            ".isin(",
+            "filtered",
+            "join",
+        )
+    ):
+        completed.update(
+            {
+                "schema_linking",
+                "target_columns",
+                "semantic_mapping",
+                "load_preprocess",
+                "join_filter",
+            }
+        )
+    if has_candidate_answer or any(
+        token in recent_text
+        for token in (
+            "groupby",
+            ".agg(",
+            ".sum(",
+            ".mean(",
+            ".count(",
+            ".nunique(",
+            "percentage",
+            "ratio",
+            "idxmax",
+            "idxmin",
+            "sort_values",
+        )
+    ):
+        completed.update(node_id for node_id, _, _ in PLANNING_NODES[:-1])
+    if has_terminal_answer:
+        completed.update(node_id for node_id, _, _ in PLANNING_NODES)
+    return completed
+
+
+def _planning_status(
+    state: AgentRuntimeState,
+    fallback_answer: AnswerTable | None,
+) -> tuple[list[dict[str, object]], str, list[str]]:
+    completed = _planning_completed_nodes(state, fallback_answer)
+    node_status: dict[str, str] = {}
+    node_records: list[dict[str, object]] = []
+    active_node: str | None = None
+
+    for node_id, dependencies, instruction in PLANNING_NODES:
+        if node_id in completed:
+            status = "done"
+        elif all(node_status.get(dependency) == "done" for dependency in dependencies):
+            status = "active" if active_node is None else "pending"
+            if status == "active":
+                active_node = node_id
+        else:
+            status = "pending"
+        node_status[node_id] = status
+        node_records.append(
+            {
+                "id": node_id,
+                "dependent_task_ids": list(dependencies),
+                "status": status,
+                "instruction": instruction,
+            }
+        )
+
+    current_focus = active_node or "submit_answer"
+    completed_nodes = [node["id"] for node in node_records if node["status"] == "done"]
+    return node_records, current_focus, completed_nodes
+
+
+def _build_planning_context(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    fallback_answer: AnswerTable | None,
+    *,
+    step_index: int,
+    max_steps: int,
+) -> tuple[str | None, dict[str, object] | None]:
+    if not _task_uses_planning(task):
+        return None, None
+
+    node_records, current_focus, completed_nodes = _planning_status(state, fallback_answer)
+    lines = [
+        "PLANNING PREFIX - medium/hard task dependency plan.",
+        "This plan is inserted at the front of every model input for this task.",
+        "Do not spend a step restating the plan; use it to choose the next action.",
+        f"Progress: model call {step_index}/{max_steps}; current_focus={current_focus}; "
+        f"completed={completed_nodes or ['none']}.",
+        "Dependency graph:",
+    ]
+    for node in node_records:
+        dependencies = ", ".join(str(dep) for dep in node["dependent_task_ids"]) or "-"
+        lines.append(
+            f"- {node['id']} deps=[{dependencies}] status={node['status']}: "
+            f"{node['instruction']}"
+        )
+    lines.append(
+        "Priority: schema linking, exact final-column decision, and semantic "
+        "mapping must happen before joins, aggregation, or final answer."
+    )
+    prompt_prefix = "\n".join(lines)
+    snapshot = {
+        "enabled": True,
+        "difficulty": task.difficulty,
+        "step_index": step_index,
+        "max_steps": max_steps,
+        "model_input_position": "front_after_system_before_task_prompt",
+        "current_focus": current_focus,
+        "completed_nodes": completed_nodes,
+        "nodes": node_records,
+        "prompt_prefix": prompt_prefix,
+    }
+    return prompt_prefix, snapshot
+
+
 class ReActAgent:
     def __init__(
         self,
@@ -562,6 +802,7 @@ class ReActAgent:
         self.system_prompt = system_prompt or REACT_SYSTEM_PROMPT
         self.prompt_tool_names = prompt_tool_names
         self.checkpoint_callback = checkpoint_callback
+        self._last_planning_snapshot: dict[str, object] | None = None
 
     def _checkpoint(
         self,
@@ -570,9 +811,12 @@ class ReActAgent:
         *,
         status: str,
         step_index: int | None = None,
+        planning: dict[str, object] | None = None,
     ) -> None:
         if self.checkpoint_callback is None:
             return
+        if planning is not None:
+            self._last_planning_snapshot = planning
         payload = AgentRunResult(
             task_id=task.task_id,
             answer=state.answer,
@@ -583,6 +827,8 @@ class ReActAgent:
             "status": status,
             "step_index": step_index,
         }
+        if self._last_planning_snapshot is not None:
+            payload["planning"] = self._last_planning_snapshot
         self.checkpoint_callback(payload)
 
     def _append_step(
@@ -599,6 +845,7 @@ class ReActAgent:
         task: PublicTask,
         state: AgentRuntimeState,
         *,
+        front_instruction: str | None = None,
         runtime_instruction: str | None = None,
     ) -> list[ModelMessage]:
         is_codeact = self.system_prompt == CODEACT_REACT_SYSTEM_PROMPT
@@ -607,6 +854,8 @@ class ReActAgent:
             system_prompt=self.system_prompt,
         )
         messages = [ModelMessage(role="system", content=system_content)]
+        if front_instruction:
+            messages.append(ModelMessage(role="user", content=front_instruction))
         messages.append(ModelMessage(role="user", content=build_task_prompt(task, codeact=is_codeact)))
         history_steps = state.steps
         if self.config.prompt_history_steps > 0:
@@ -690,15 +939,30 @@ class ReActAgent:
 
     def run(self, task: PublicTask) -> AgentRunResult:
         state = AgentRuntimeState()
+        self._last_planning_snapshot = None
         fallback_answer: AnswerTable | None = None
         consecutive_parse_errors = 0
         for step_index in range(1, self.config.max_steps + 1):
             try:
-                self._checkpoint(task, state, status="before_model_request", step_index=step_index)
+                planning_instruction, planning_snapshot = _build_planning_context(
+                    task,
+                    state,
+                    fallback_answer,
+                    step_index=step_index,
+                    max_steps=self.config.max_steps,
+                )
+                self._checkpoint(
+                    task,
+                    state,
+                    status="before_model_request",
+                    step_index=step_index,
+                    planning=planning_snapshot,
+                )
                 raw_response = self.model.complete(
                     self._build_messages(
                         task,
                         state,
+                        front_instruction=planning_instruction,
                         runtime_instruction=self._build_runtime_instruction(
                             task=task,
                             step_index=step_index,
