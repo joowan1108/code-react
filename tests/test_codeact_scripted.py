@@ -250,6 +250,27 @@ def test_knowledge_reminder_skips_non_hard_tasks() -> None:
         assert "Knowledge note:" not in prompt
 
 
+def test_knowledge_reminder_skips_format_only_hard_tasks() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "knowledge.md").write_text(
+            "Format names are documented here.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_format",
+                difficulty="hard",
+                question="What percentage of cards with format commander have no content?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "Knowledge note:" not in prompt
+
+
 def test_context_manifest_summarizes_structured_files() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)

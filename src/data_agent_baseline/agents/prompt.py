@@ -110,13 +110,9 @@ KNOWLEDGE_TRIGGER_TERMS = {
     "classification",
     "code",
     "coded",
-    "commander",
-    "content",
     "diagnosis",
     "disease",
-    "format",
     "legal",
-    "level",
     "meaning",
     "normal",
     "range",
@@ -124,7 +120,6 @@ KNOWLEDGE_TRIGGER_TERMS = {
     "severe",
     "status",
     "threshold",
-    "value",
     "warning",
 }
 
@@ -181,7 +176,7 @@ def _knowledge_reminder(task: PublicTask) -> str:
     if not has_knowledge:
         return ""
     return (
-        "Knowledge note: this hard task has knowledge.md and domain/rule wording. "
+        "Knowledge note: the question may hinge on a domain rule or coded meaning. "
         "Consider `retrieve_knowledge(top_k=2, max_chars=500)` only if structured columns or compact samples "
         "do not define the needed coded value, threshold, normal/abnormal rule, or ambiguous term. "
         "Do not use it for quoted-value lookup or broad document reading. "
