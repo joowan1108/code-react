@@ -187,13 +187,37 @@ def test_runtime_instruction_does_not_report_current_step() -> None:
         temp_context.cleanup()
 
 
-def test_medium_planning_prefix_is_front_of_model_input() -> None:
+def test_medium_task_does_not_use_planning_prefix() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
             record=TaskRecord(
                 task_id="task_medium",
                 difficulty="medium",
+                question="Return the average score by group.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=1,
+            max_steps=16,
+        )
+
+        assert planning_instruction is None
+        assert planning_snapshot is None
+
+
+def test_hard_planning_prefix_is_front_of_model_input() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hard",
+                difficulty="hard",
                 question="Return the average score by group.",
             ),
             assets=TaskAssets(task_dir=context_path, context_dir=context_path),
@@ -225,6 +249,9 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
         assert "schema_linking" in messages[1].content
         assert "target_columns" in messages[1].content
         assert "Progress: model call 1/16" in messages[1].content
+        assert "completed=" not in messages[1].content
+        assert "done" not in messages[1].content
+        assert "observed_signals" in messages[1].content
         assert "Return the average score by group." in messages[2].content
 
 
@@ -267,6 +294,7 @@ def test_planning_snapshot_is_checkpointed_for_partial_trace() -> None:
         assert isinstance(planning, dict)
         assert planning["enabled"] is True
         assert planning["model_input_position"] == "front_after_system_before_task_prompt"
+        assert "observed_nodes" in planning
         assert "PLANNING PREFIX" in str(planning["prompt_prefix"])
 
 

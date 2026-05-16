@@ -43,7 +43,7 @@ FINAL_RESULT_MARKERS = (
     "ANSWER_CANDIDATE:",
 )
 
-PLANNING_DIFFICULTIES = {"medium", "hard"}
+PLANNING_DIFFICULTIES = {"hard", "extreme"}
 
 PLANNING_NODES = (
     (
@@ -610,7 +610,7 @@ def _step_text_for_planning(step: StepRecord) -> str:
     return "\n".join(parts).lower()
 
 
-def _planning_completed_nodes(
+def _planning_observed_nodes(
     state: AgentRuntimeState,
     fallback_answer: AnswerTable | None,
 ) -> set[str]:
@@ -627,11 +627,11 @@ def _planning_completed_nodes(
         step.action == "answer" and step.ok for step in steps
     )
 
-    completed: set[str] = set()
+    observed: set[str] = set()
     if successful_python_steps:
-        completed.add("schema_linking")
+        observed.add("schema_linking")
     if has_candidate_answer or re.search(r"\bcolumns?\b|final_table_json|answer_candidate", recent_text):
-        completed.update({"schema_linking", "target_columns"})
+        observed.update({"schema_linking", "target_columns"})
     if len(successful_python_steps) >= 2 or any(
         token in recent_text
         for token in (
@@ -647,7 +647,7 @@ def _planning_completed_nodes(
             "coded",
         )
     ):
-        completed.update({"schema_linking", "target_columns", "semantic_mapping"})
+        observed.update({"schema_linking", "target_columns", "semantic_mapping"})
     if len(successful_python_steps) >= 2 or any(
         token in recent_text
         for token in (
@@ -662,7 +662,7 @@ def _planning_completed_nodes(
             "str.strip",
         )
     ):
-        completed.update({"schema_linking", "target_columns", "semantic_mapping", "load_preprocess"})
+        observed.update({"schema_linking", "target_columns", "semantic_mapping", "load_preprocess"})
     if any(
         token in recent_text
         for token in (
@@ -676,7 +676,7 @@ def _planning_completed_nodes(
             "join",
         )
     ):
-        completed.update(
+        observed.update(
             {
                 "schema_linking",
                 "target_columns",
@@ -701,30 +701,30 @@ def _planning_completed_nodes(
             "sort_values",
         )
     ):
-        completed.update(node_id for node_id, _, _ in PLANNING_NODES[:-1])
+        observed.update(node_id for node_id, _, _ in PLANNING_NODES[:-1])
     if has_terminal_answer:
-        completed.update(node_id for node_id, _, _ in PLANNING_NODES)
-    return completed
+        observed.update(node_id for node_id, _, _ in PLANNING_NODES)
+    return observed
 
 
 def _planning_status(
     state: AgentRuntimeState,
     fallback_answer: AnswerTable | None,
 ) -> tuple[list[dict[str, object]], str, list[str]]:
-    completed = _planning_completed_nodes(state, fallback_answer)
+    observed = _planning_observed_nodes(state, fallback_answer)
     node_status: dict[str, str] = {}
     node_records: list[dict[str, object]] = []
     active_node: str | None = None
 
     for node_id, dependencies, instruction in PLANNING_NODES:
-        if node_id in completed:
-            status = "done"
-        elif all(node_status.get(dependency) == "done" for dependency in dependencies):
-            status = "active" if active_node is None else "pending"
-            if status == "active":
+        if node_id in observed:
+            status = "observed"
+        elif all(node_status.get(dependency) == "observed" for dependency in dependencies):
+            status = "focus" if active_node is None else "later"
+            if status == "focus":
                 active_node = node_id
         else:
-            status = "pending"
+            status = "later"
         node_status[node_id] = status
         node_records.append(
             {
@@ -736,8 +736,8 @@ def _planning_status(
         )
 
     current_focus = active_node or "submit_answer"
-    completed_nodes = [node["id"] for node in node_records if node["status"] == "done"]
-    return node_records, current_focus, completed_nodes
+    observed_nodes = [node["id"] for node in node_records if node["status"] == "observed"]
+    return node_records, current_focus, observed_nodes
 
 
 def _build_planning_context(
@@ -751,14 +751,15 @@ def _build_planning_context(
     if not _task_uses_planning(task):
         return None, None
 
-    node_records, current_focus, completed_nodes = _planning_status(state, fallback_answer)
+    node_records, current_focus, observed_nodes = _planning_status(state, fallback_answer)
     lines = [
-        "PLANNING PREFIX - medium/hard task dependency plan.",
-        "This plan is inserted at the front of every model input for this task.",
+        "PLANNING PREFIX - hard/extreme task working checklist.",
+        "This checklist is inserted at the front of every model input for this task.",
         "Do not spend a step restating the plan; use it to choose the next action.",
+        "Statuses are heuristic signals, not proof that a step is fully solved; confirm evidence before relying on them.",
         f"Progress: model call {step_index}/{max_steps}; current_focus={current_focus}; "
-        f"completed={completed_nodes or ['none']}.",
-        "Dependency graph:",
+        f"observed_signals={observed_nodes or ['none']}.",
+        "Dependency checklist:",
     ]
     for node in node_records:
         dependencies = ", ".join(str(dep) for dep in node["dependent_task_ids"]) or "-"
@@ -767,8 +768,9 @@ def _build_planning_context(
             f"{node['instruction']}"
         )
     lines.append(
-        "Priority: schema linking, exact final-column decision, and semantic "
-        "mapping must happen before joins, aggregation, or final answer."
+        "Priority: first link schema and decide exact final columns; then map "
+        "question terms to real columns/values; submit as soon as the answer is "
+        "supported, with no helper columns."
     )
     prompt_prefix = "\n".join(lines)
     snapshot = {
@@ -778,7 +780,7 @@ def _build_planning_context(
         "max_steps": max_steps,
         "model_input_position": "front_after_system_before_task_prompt",
         "current_focus": current_focus,
-        "completed_nodes": completed_nodes,
+        "observed_nodes": observed_nodes,
         "nodes": node_records,
         "prompt_prefix": prompt_prefix,
     }
