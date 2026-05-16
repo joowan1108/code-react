@@ -8,7 +8,7 @@ from pathlib import Path
 
 from data_agent_baseline.agents.model import ScriptedModelAdapter
 from data_agent_baseline.agents.manifest import build_context_manifest
-from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT
+from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT, build_task_prompt
 from data_agent_baseline.agents.react import (
     ReActAgent,
     ReActAgentConfig,
@@ -184,6 +184,70 @@ def test_runtime_instruction_does_not_report_current_step() -> None:
         assert "Finalization window" not in recovery_instruction
     finally:
         temp_context.cleanup()
+
+
+def test_hard_rule_task_gets_conservative_knowledge_reminder() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "knowledge.md").write_text(
+            "Creatinine is abnormal above 1.3.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_rule",
+                difficulty="hard",
+                question="Among patients whose creatinine level is abnormal, return their IDs.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "Knowledge note:" in prompt
+        assert "retrieve_knowledge(top_k=2, max_chars=500)" in prompt
+
+
+def test_knowledge_reminder_skips_quoted_value_lookup() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "knowledge.md").write_text(
+            "Meeting names and aliases.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_quote",
+                difficulty="hard",
+                question='How many records mention "October Meeting"?',
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "Knowledge note:" not in prompt
+
+
+def test_knowledge_reminder_skips_non_hard_tasks() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "knowledge.md").write_text(
+            "Creatinine is abnormal above 1.3.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_easy",
+                difficulty="easy",
+                question="How many patients have abnormal creatinine?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "Knowledge note:" not in prompt
 
 
 def test_context_manifest_summarizes_structured_files() -> None:

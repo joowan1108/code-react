@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from data_agent_baseline.agents.manifest import build_context_manifest
 from data_agent_baseline.benchmark.schema import PublicTask
@@ -104,6 +105,29 @@ Answer:
 
 """.strip()
 
+KNOWLEDGE_TRIGGER_TERMS = {
+    "abnormal",
+    "classification",
+    "code",
+    "coded",
+    "commander",
+    "content",
+    "diagnosis",
+    "disease",
+    "format",
+    "legal",
+    "level",
+    "meaning",
+    "normal",
+    "range",
+    "rule",
+    "severe",
+    "status",
+    "threshold",
+    "value",
+    "warning",
+}
+
 
 def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None) -> str:
     base_prompt = system_prompt or REACT_SYSTEM_PROMPT
@@ -135,6 +159,35 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
     )
 
 
+def _tokens(text: str) -> set[str]:
+    return {token.casefold() for token in re.findall(r"[A-Za-z0-9]+", text) if len(token) > 1}
+
+
+def _has_quoted_value(text: str) -> bool:
+    return bool(re.search(r'"[^"]+"|\'[^\']+\'', text))
+
+
+def _knowledge_reminder(task: PublicTask) -> str:
+    if task.difficulty.casefold() != "hard":
+        return ""
+    if _has_quoted_value(task.question):
+        return ""
+    if not (_tokens(task.question) & KNOWLEDGE_TRIGGER_TERMS):
+        return ""
+    try:
+        has_knowledge = any(task.context_dir.rglob("knowledge.md"))
+    except Exception:  # noqa: BLE001
+        has_knowledge = False
+    if not has_knowledge:
+        return ""
+    return (
+        "Knowledge note: this hard task has knowledge.md and domain/rule wording. "
+        "Consider `retrieve_knowledge(top_k=2, max_chars=500)` only if structured columns or compact samples "
+        "do not define the needed coded value, threshold, normal/abnormal rule, or ambiguous term. "
+        "Do not use it for quoted-value lookup or broad document reading. "
+    )
+
+
 def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
     context_manifest = build_context_manifest(task.context_dir, question=task.question)
     if codeact:
@@ -149,6 +202,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
             "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
+            f"{_knowledge_reminder(task)}"
             "The final answer should contain only the columns requested by the question. "
             "Before finalizing, check ties for min/max/top wording, include all matching rows for list/all wording, "
             "and check distinct counts or monthly/yearly unit conversions when relevant."
