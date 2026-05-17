@@ -792,6 +792,96 @@ def test_python_namespace_exposes_markdown_record_graph() -> None:
         assert "$100" in result["output"]
 
 
+def test_link_question_to_data_links_markdown_entities_to_structured_ids() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "csv").mkdir()
+        (context_path / "doc").mkdir()
+        (context_path / "csv" / "event.csv").write_text(
+            "event_id,event_name\n"
+            "recykdvf4LgsyA3wZ,Yearly Kickoff\n"
+            "recggMW2eyCYceNcy,October Meeting\n",
+            encoding="utf-8",
+        )
+        (context_path / "doc" / "budget.md").write_text(
+            "The Yearly Kickoff event uses event record recykdvf4LgsyA3wZ.\n\n"
+            "Budget recvKTAWAFKkVNnXQ is the Advertisement allocation for event recykdvf4LgsyA3wZ. "
+            "It was allocated 150.\n\n"
+            "The October Meeting event uses event record recggMW2eyCYceNcy.\n\n"
+            "Budget recTxecmwIhCdIKvl is the Advertisement allocation for event recggMW2eyCYceNcy. "
+            "It was allocated 55.\n",
+            encoding="utf-8",
+        )
+
+        result = execute_python_code(
+            context_path,
+            (
+                "import json\n"
+                "links = link_question_to_data(max_candidates=5)\n"
+                "print(json.dumps(links, ensure_ascii=False))\n"
+            ),
+            timeout_seconds=10,
+            question='How many times was the budget in Advertisement for "Yearly Kickoff" more than "October Meeting"?',
+        )
+
+        assert result["success"]
+        links = json.loads(result["output"])
+        rendered = json.dumps(links, ensure_ascii=False)
+        assert "Yearly Kickoff" in rendered
+        assert "csv/event.csv:event_name" in rendered
+        assert "recykdvf4LgsyA3wZ" in rendered
+        assert "recvKTAWAFKkVNnXQ" in rendered
+        assert "usable_filter" in rendered
+
+
+def test_link_question_to_data_handles_structured_only_entity_and_join_hints() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "json").mkdir()
+        (context_path / "csv").mkdir()
+        (context_path / "json" / "drivers.json").write_text(
+            json.dumps(
+                {
+                    "table": "drivers",
+                    "records": [
+                        {"driverId": 62, "forename": "Alex", "surname": "Yoong"},
+                        {"driverId": 1, "forename": "Lewis", "surname": "Hamilton"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (context_path / "csv" / "results.csv").write_text(
+            "raceId,driverId,number\n18,62,12\n19,1,44\n",
+            encoding="utf-8",
+        )
+        (context_path / "csv" / "races.csv").write_text(
+            "raceId,name\n18,Australian Grand Prix\n19,Malaysian Grand Prix\n",
+            encoding="utf-8",
+        )
+
+        result = execute_python_code(
+            context_path,
+            (
+                "import json\n"
+                "from utils import link_question_to_data\n"
+                "links = link_question_to_data(max_candidates=5, include_markdown=False)\n"
+                "print(json.dumps(links, ensure_ascii=False))\n"
+            ),
+            timeout_seconds=10,
+            question="Which race was Alex Yoong in when he was in track number less than 20?",
+        )
+
+        assert result["success"]
+        links = json.loads(result["output"])
+        rendered = json.dumps(links, ensure_ascii=False)
+        assert "Alex Yoong" in rendered
+        assert "driverId" in rendered
+        assert "62" in rendered
+        assert "join_candidates" in links
+        assert any("driverId" in candidate["left"] + candidate["right"] for candidate in links["join_candidates"])
+
+
 def test_python_markdown_helpers_support_model_style_imports() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)

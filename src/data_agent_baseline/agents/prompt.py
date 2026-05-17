@@ -43,6 +43,7 @@ Operational rules:
 13. If the question mentions a concept that is not present as a real table, column, or observed record value, do not assume its meaning. First find the concrete data source that implements it; if it only appears in markdown, map it back to real columns/records before computing.
 14. For JSON files, prefer direct `load_json_table("json/name.json")` or `load_json_records("json/name.json")` calls; these helpers unwrap common `{table, records}` JSON wrappers.
 15. Use direct markdown helper calls only as a fallback when structured files do not contain the requested rule, linked prose record, threshold, or coded meaning.
+16. If you are unsure how a question mention, markdown record ID, or quoted value connects to structured columns, call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates instead of guessing.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -145,6 +146,8 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "For SQLite files, rely on the manifest's sqlite_master and PRAGMA schema before writing joins. "
             "Do not assume concepts that are absent from the schema; map every requested concept to a real "
             "table, column, or observed record value before computing. "
+            "If a mention, quoted value, markdown ID, or prose rule is hard to connect to columns, call "
+            "`link_question_to_data(max_candidates=5)` once for grounded entity/value links before repeating searches. "
             "Use direct markdown helper calls only when structured CSV/JSON/SQLite evidence is missing or a real rule, "
             "threshold, linked prose record, or coded meaning must be retrieved from markdown. "
             "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
@@ -221,6 +224,8 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If a question concept is not present in the schema, do not invent or assume it; find the concrete "
             "column/table/record or markdown rule that implements it, then verify it against observed data. "
+            "When the final connection between question terms, markdown record IDs, and real columns is unclear, "
+            "call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates. "
             "For JSON files, prefer direct `load_json_table(\"json/file.json\")` or `load_json_records(\"json/file.json\")` calls "
             "instead of manually guessing whether the payload is a list or a `{table, records}` wrapper. "
             f"{_markdown_helper_note(task)}"
