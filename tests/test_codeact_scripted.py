@@ -374,7 +374,7 @@ def test_planning_snapshot_is_checkpointed_for_partial_trace() -> None:
         assert "PLANNING PREFIX" in str(planning["prompt_prefix"])
 
 
-def test_late_planning_prioritizes_answer_submission() -> None:
+def test_late_planning_does_not_prioritize_answer_without_final_table() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -412,9 +412,103 @@ def test_late_planning_prioritizes_answer_submission() -> None:
 
         assert planning_instruction is not None
         assert planning_snapshot is not None
+        assert planning_snapshot["current_focus"] != "answer_submission"
+        assert planning_snapshot["answer_submission_urgent"] is False
+        assert planning_snapshot["final_focused_attempt"] is True
+        assert "FINAL-STEPS EXACTNESS RULE" in planning_instruction
+
+
+def test_late_planning_prioritizes_parseable_final_table() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hard",
+                difficulty="hard",
+                question="What percentage of rows match the condition?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        state.steps.append(
+            StepRecord(
+                step_index=14,
+                thought="Computed the requested percentage.",
+                action="execute_python",
+                action_input={"code": "print final table"},
+                raw_response="Thought: compute\nCode:\n```python\nprint('FINAL_TABLE_JSON')\n```",
+                observation={
+                    "ok": True,
+                    "tool": "execute_python",
+                    "content": {
+                        "output": 'FINAL_TABLE_JSON:\n{"columns":["percentage"],"rows":[[100.0]]}',
+                        "stderr": "",
+                    },
+                },
+                ok=True,
+            )
+        )
+
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=15,
+            max_steps=16,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
         assert planning_snapshot["current_focus"] == "answer_submission"
         assert planning_snapshot["answer_submission_urgent"] is True
+        assert planning_snapshot["final_focused_attempt"] is False
         assert "FINAL-STEPS SUBMISSION RULE" in planning_instruction
+
+
+def test_how_many_times_count_candidate_is_not_submission_ready() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hard",
+                difficulty="hard",
+                question='How many times was the budget for "A" more than "B"?',
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        state.steps.append(
+            StepRecord(
+                step_index=14,
+                thought="Computed a candidate count.",
+                action="execute_python",
+                action_input={"code": "print final table"},
+                raw_response="Thought: compute\nCode:\n```python\nprint('FINAL_TABLE_JSON')\n```",
+                observation={
+                    "ok": True,
+                    "tool": "execute_python",
+                    "content": {
+                        "output": 'FINAL_TABLE_JSON:\n{"columns":["count"],"rows":[[1]]}',
+                        "stderr": "",
+                    },
+                },
+                ok=True,
+            )
+        )
+
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=15,
+            max_steps=16,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        assert planning_snapshot["answer_submission_urgent"] is False
+        assert planning_snapshot["final_focused_attempt"] is True
+        assert "FINAL-STEPS EXACTNESS RULE" in planning_instruction
 
 
 def test_hard_markdown_entity_task_requires_grounded_linking() -> None:

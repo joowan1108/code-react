@@ -156,6 +156,15 @@ RESULT_SIGNAL_TERMS = (
     "computed",
 )
 
+RATIO_QUESTION_TERMS = (
+    "how many times",
+    "how much faster",
+    "percentage",
+    "percent",
+    "ratio",
+    "proportion",
+)
+
 
 def _strip_json_fence(raw_response: str) -> str:
     text = raw_response.strip()
@@ -853,22 +862,96 @@ def _recent_result_signal(state: AgentRuntimeState) -> bool:
     return any(term in recent_text for term in RESULT_SIGNAL_TERMS)
 
 
+def _answer_has_submission_shape(task: PublicTask, answer: AnswerTable) -> bool:
+    if not answer.columns:
+        return False
+    if _question_expects_nonempty_rows(task.question) and not answer.rows:
+        return False
+    if _question_is_single_value(task.question) and (len(answer.columns) != 1 or len(answer.rows) != 1):
+        return False
+    return True
+
+
+def _answer_column_is_semantically_suspicious(task: PublicTask, answer: AnswerTable) -> bool:
+    question = task.question.casefold()
+    columns = {column.casefold().strip() for column in answer.columns}
+    if "how many times" in question and columns & {"count", "total", "number", "num"}:
+        return True
+    if any(term in question for term in RATIO_QUESTION_TERMS) and len(answer.columns) == 1:
+        column = next(iter(columns))
+        if column in {"count", "total", "number", "num", "n"}:
+            return True
+    return False
+
+
+def _answer_is_submission_ready(task: PublicTask, answer: AnswerTable) -> bool:
+    return (
+        _answer_has_submission_shape(task, answer)
+        and not _answer_column_is_semantically_suspicious(task, answer)
+    )
+
+
+def _candidate_answer_from_step(task: PublicTask, step: StepRecord) -> AnswerTable | None:
+    if step.action != "execute_python" or not step.ok:
+        return None
+    content = step.observation.get("content")
+    if not isinstance(content, dict):
+        return None
+    stdout = str(content.get("output") or content.get("stdout") or "")
+    payload = _find_marker_payload(stdout, FINAL_RESULT_MARKERS)
+    if payload is None:
+        return None
+    answer = _answer_table_from_payload(payload)
+    if answer is None:
+        return None
+    return _sanitize_answer_table(task, answer)
+
+
+def _latest_submission_ready_candidate(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    fallback_answer: AnswerTable | None,
+) -> AnswerTable | None:
+    if fallback_answer is not None and _answer_is_submission_ready(task, fallback_answer):
+        return fallback_answer
+    for step in reversed(state.steps):
+        answer = _candidate_answer_from_step(task, step)
+        if answer is not None and _answer_is_submission_ready(task, answer):
+            return answer
+    return None
+
+
 def _should_prioritize_answer_submission(
+    task: PublicTask,
     state: AgentRuntimeState,
     fallback_answer: AnswerTable | None,
     *,
     step_index: int,
     max_steps: int,
 ) -> bool:
-    if fallback_answer is not None:
-        return True
-    successful_python_steps = [step for step in state.steps if step.action == "execute_python" and step.ok]
-    if not successful_python_steps:
+    _ = step_index, max_steps
+    return _latest_submission_ready_candidate(task, state, fallback_answer) is not None
+
+
+def _should_issue_final_focused_attempt(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    fallback_answer: AnswerTable | None,
+    *,
+    step_index: int,
+    max_steps: int,
+) -> bool:
+    if _should_prioritize_answer_submission(
+        task,
+        state,
+        fallback_answer,
+        step_index=step_index,
+        max_steps=max_steps,
+    ):
         return False
-    remaining_calls = max_steps - step_index + 1
-    if remaining_calls <= 2:
-        return True
-    return remaining_calls <= 4 and _recent_result_signal(state)
+    if max_steps - step_index + 1 > 2:
+        return False
+    return any(step.action == "execute_python" and step.ok for step in state.steps)
 
 
 def _planning_observed_nodes(
@@ -1017,6 +1100,17 @@ def _force_planning_focus(
             node["status"] = "focus"
 
 
+def _defer_answer_submission_focus(
+    node_records: list[dict[str, object]],
+    *,
+    fallback_focus: str,
+) -> str:
+    for node in node_records:
+        if node.get("id") == "answer_submission" and node.get("status") == "focus":
+            node["status"] = "later"
+    return fallback_focus
+
+
 def _build_planning_context(
     task: PublicTask,
     state: AgentRuntimeState,
@@ -1030,6 +1124,14 @@ def _build_planning_context(
 
     difficulty = task.difficulty.casefold()
     answer_urgent = _should_prioritize_answer_submission(
+        task,
+        state,
+        fallback_answer,
+        step_index=step_index,
+        max_steps=max_steps,
+    )
+    final_focused_attempt = _should_issue_final_focused_attempt(
+        task,
         state,
         fallback_answer,
         step_index=step_index,
@@ -1045,6 +1147,11 @@ def _build_planning_context(
         if answer_urgent:
             _force_planning_focus(node_records, "answer_submission")
             current_focus = "answer_submission"
+        elif current_focus == "answer_submission":
+            current_focus = _defer_answer_submission_focus(
+                node_records,
+                fallback_focus="final_focused_attempt" if final_focused_attempt else "target_columns",
+            )
         lines = [
             "PLANNING PREFIX - medium task light schema/final-column checklist.",
             "This compact checklist is inserted at the front of every model input for this task.",
@@ -1066,9 +1173,14 @@ def _build_planning_context(
         )
         if answer_urgent:
             lines.append(
-                "FINAL-STEPS SUBMISSION RULE: if the latest observation contains the requested "
-                "rows, count, percentage, or value, return `Answer:` now. Run code only if a "
-                "required requested value is still missing."
+                "FINAL-STEPS SUBMISSION RULE: a parseable final answer candidate is already "
+                "available. Return `Answer:` now with exactly those requested columns and rows."
+            )
+        elif final_focused_attempt:
+            lines.append(
+                "FINAL-STEPS EXACTNESS RULE: do not submit a guess. Run at most one focused "
+                "script to verify the exact requested value and print `FINAL_TABLE_JSON:` only "
+                "if the table is exact."
             )
         prompt_prefix = "\n".join(lines)
         snapshot = {
@@ -1079,6 +1191,7 @@ def _build_planning_context(
             "max_steps": max_steps,
             "remaining_model_calls": max_steps - step_index + 1,
             "answer_submission_urgent": answer_urgent,
+            "final_focused_attempt": final_focused_attempt,
             "model_input_position": "front_after_system_before_task_prompt",
             "current_focus": current_focus,
             "observed_nodes": observed_nodes,
@@ -1091,6 +1204,11 @@ def _build_planning_context(
     if answer_urgent:
         _force_planning_focus(node_records, "answer_submission")
         current_focus = "answer_submission"
+    elif current_focus == "answer_submission":
+        current_focus = _defer_answer_submission_focus(
+            node_records,
+            fallback_focus="final_focused_attempt" if final_focused_attempt else "final_verify",
+        )
     lines = [
         "PLANNING PREFIX - hard/extreme task working checklist.",
         "This checklist is inserted at the front of every model input for this task.",
@@ -1122,9 +1240,14 @@ def _build_planning_context(
         )
     if answer_urgent:
         lines.append(
-            "FINAL-STEPS SUBMISSION RULE: if the latest observation contains the requested "
-            "rows, count, percentage, or value, return `Answer:` now. Do not run another "
-            "exploratory script unless a required requested value is still missing."
+            "FINAL-STEPS SUBMISSION RULE: a parseable final answer candidate is already "
+            "available. Return `Answer:` now with exactly those requested columns and rows."
+        )
+    elif final_focused_attempt:
+        lines.append(
+            "FINAL-STEPS EXACTNESS RULE: do not submit a guess. Run at most one focused "
+            "script to verify the exact requested value and print `FINAL_TABLE_JSON:` only "
+            "if the table is exact."
         )
     prompt_prefix = "\n".join(lines)
     snapshot = {
@@ -1134,6 +1257,7 @@ def _build_planning_context(
         "max_steps": max_steps,
         "remaining_model_calls": max_steps - step_index + 1,
         "answer_submission_urgent": answer_urgent,
+        "final_focused_attempt": final_focused_attempt,
         "link_question_to_data_required": require_linking_helper,
         "model_input_position": "front_after_system_before_task_prompt",
         "current_focus": current_focus,
@@ -1266,24 +1390,33 @@ class ReActAgent:
                 "mentions or markdown records to actual structured data. You may continue solving in the same script."
             )
         if _should_prioritize_answer_submission(
+            task,
             state,
             fallback_answer,
             step_index=step_index,
             max_steps=self.config.max_steps,
         ):
-            if fallback_answer is not None:
-                preview = _safe_json_dumps(_answer_preview(fallback_answer, max_rows=2))
+            answer = _latest_submission_ready_candidate(task, state, fallback_answer)
+            if answer is not None:
+                preview = _safe_json_dumps(_answer_preview(answer, max_rows=2))
                 instructions.append(
-                    "Final submission priority: a valid fallback answer candidate is already available. "
+                    "Final submission priority: a valid final answer candidate is already available. "
                     f"Submit `Answer:` now using exactly this table shape: {preview}. "
                     "Do not run more code unless you can name a missing requested value."
                 )
-            else:
-                instructions.append(
-                    "Final submission priority: there are very few model calls left. If the latest observation "
-                    "contains the requested rows, count, percentage, or value, return `Answer:` now with exactly "
-                    "the requested columns. Run more Python only if a required requested value is still missing."
-                )
+        elif _should_issue_final_focused_attempt(
+            task,
+            state,
+            fallback_answer,
+            step_index=step_index,
+            max_steps=self.config.max_steps,
+        ):
+            instructions.append(
+                "Final focused attempt: do not submit a guess. Run at most one compact script that verifies the "
+                "exact requested operation and prints `FINAL_TABLE_JSON:` only if the table is exact. "
+                "For 'how many times', compute a ratio, not a count. For percentage questions, return a percentage. "
+                "For normal/abnormal wording, verify the threshold source before finalizing."
+            )
         if not instructions:
             return None
         return "\n\n".join(instructions)
