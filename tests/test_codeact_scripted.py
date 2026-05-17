@@ -208,7 +208,7 @@ def test_python_repair_hints_for_common_runtime_errors() -> None:
         },
         "from tools import retrieve_knowledge\nretrieve_knowledge()",
     )
-    assert any("call them directly" in hint for hint in import_hints)
+    assert any("load_json_table" in hint for hint in import_hints)
 
 
 def test_final_answer_check_warns_about_likely_extra_columns() -> None:
@@ -457,6 +457,54 @@ def test_knowledge_reminder_skips_format_only_hard_tasks() -> None:
         assert "Knowledge note:" not in prompt
 
 
+def test_codeact_task_prompt_prioritizes_json_helpers_over_markdown_for_knowledge_only_tasks() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "json").mkdir()
+        (context_path / "json" / "colour.json").write_text(
+            json.dumps({"table": "colour", "records": [{"id": 9, "colour": "Brown"}]}),
+            encoding="utf-8",
+        )
+        (context_path / "knowledge.md").write_text("Colour lookup guide.", encoding="utf-8")
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_json",
+                difficulty="easy",
+                question="Return the colour for id 9.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "load_json_table" in prompt
+        assert "load_json_records" in prompt
+        assert "extract_markdown_records" not in prompt
+
+
+def test_codeact_task_prompt_mentions_markdown_helpers_only_for_document_markdown() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "doc").mkdir()
+        (context_path / "doc" / "budget.md").write_text(
+            "Budget recA has amount 100.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_doc",
+                difficulty="hard",
+                question="Find the amount linked to budget recA.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "extract_markdown_records" in prompt
+        assert "after checking structured data" in prompt
+
+
 def test_context_manifest_summarizes_structured_files() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
@@ -661,6 +709,53 @@ def test_python_namespace_exposes_search_markdown_snippets() -> None:
         assert "doc/budget.md" in result["output"]
         assert "Yearly Kickoff" in result["output"]
         assert "October Meeting" in result["output"]
+
+
+def test_python_namespace_exposes_json_wrapper_helpers() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "json").mkdir()
+        (context_path / "json" / "colour.json").write_text(
+            json.dumps(
+                {
+                    "table": "colour",
+                    "records": [
+                        {"id": 7, "colour": "Blue"},
+                        {"id": 9, "colour": "Brown"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (context_path / "json" / "power.json").write_text(
+            json.dumps(
+                {
+                    "superpower": [
+                        {"id": 18, "power_name": "Super Strength"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = execute_python_code(
+            context_path,
+            (
+                "from tools import load_json_records, load_json_table\n"
+                "colour = load_json_table('json/colour.json')\n"
+                "powers = load_json_records('json/power.json')\n"
+                "print(colour.columns.tolist())\n"
+                "print(colour.loc[colour['id'].eq(9), 'colour'].iloc[0])\n"
+                "print(powers[0]['power_name'])\n"
+            ),
+            timeout_seconds=10,
+            question="Find Brown and Super Strength.",
+        )
+
+        assert result["success"]
+        assert "['id', 'colour']" in result["output"]
+        assert "Brown" in result["output"]
+        assert "Super Strength" in result["output"]
 
 
 def test_python_namespace_exposes_markdown_record_graph() -> None:

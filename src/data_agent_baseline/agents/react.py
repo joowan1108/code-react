@@ -420,8 +420,9 @@ def _python_repair_hints(content: dict[str, object], code: str) -> list[str]:
         )
     if "no module named 'tools'" in lowered or "no module named 'knowledge'" in lowered:
         add(
-            "retrieve_knowledge(...) and search_markdown(...) are already injected Python functions; "
-            "call them directly instead of importing from tools or knowledge."
+            "Helper functions are injected into Python. Call retrieve_knowledge(...), search_markdown(...), "
+            "extract_markdown_records(...), load_json_records(...), or load_json_table(...) directly, or import "
+            "them from the injected tools/json helper modules if available."
         )
     if "trying to merge on" in lowered and ("int64" in lowered or "object" in lowered or "str" in lowered):
         add(

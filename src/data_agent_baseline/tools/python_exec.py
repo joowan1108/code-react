@@ -449,10 +449,18 @@ def _python_helper_modules(functions: dict[str, Any]) -> dict[str, types.ModuleT
         "extract_markdown_records": {
             "extract_markdown_records": functions["extract_markdown_records"],
         },
+        "load_json_records": {"load_json_records": functions["load_json_records"]},
+        "load_json_table": {"load_json_table": functions["load_json_table"]},
+        "json_helpers": {
+            "load_json_records": functions["load_json_records"],
+            "load_json_table": functions["load_json_table"],
+        },
         "tools": {
             "retrieve_knowledge": functions["retrieve_knowledge"],
             "search_markdown": functions["search_markdown"],
             "extract_markdown_records": functions["extract_markdown_records"],
+            "load_json_records": functions["load_json_records"],
+            "load_json_table": functions["load_json_table"],
         },
     }
     for module_name, attributes in module_specs.items():
@@ -471,6 +479,28 @@ def _restore_python_helper_modules(previous_modules: dict[str, types.ModuleType 
             sys.modules.pop(module_name, None)
         else:
             sys.modules[module_name] = previous_module
+
+
+def _json_records_from_payload(payload: object) -> list[object]:
+    if isinstance(payload, list):
+        return list(payload)
+    if isinstance(payload, dict):
+        records = payload.get("records")
+        if isinstance(records, list):
+            return list(records)
+
+        list_items = [(key, value) for key, value in payload.items() if isinstance(value, list)]
+        dict_list_items = [
+            (key, value)
+            for key, value in list_items
+            if value and all(isinstance(item, dict) for item in value[:5])
+        ]
+        if len(dict_list_items) == 1:
+            return list(dict_list_items[0][1])
+        if len(list_items) == 1:
+            return list(list_items[0][1])
+        return [payload]
+    return [payload]
 
 
 def _run_python_code(
@@ -550,6 +580,22 @@ def _run_python_code(
             link_depth=link_depth,
         )
 
+    def resolve_context_path(path: str | Path) -> Path:
+        candidate = Path(path)
+        resolved = candidate.resolve() if candidate.is_absolute() else (resolved_context_root / candidate).resolve()
+        if not resolved.is_relative_to(resolved_context_root):
+            raise ValueError(f"Path is outside task context: {path}")
+        return resolved
+
+    def load_json_records_helper(path: str | Path) -> list[object]:
+        payload = json.loads(resolve_context_path(path).read_text(encoding="utf-8"))
+        return _json_records_from_payload(payload)
+
+    def load_json_table_helper(path: str | Path) -> Any:
+        if pd is None:
+            raise RuntimeError("pandas is not available")
+        return pd.DataFrame(load_json_records_helper(path))
+
     namespace: dict[str, Any] = {
         "__builtins__": __builtins__,
         "__name__": "__main__",
@@ -571,6 +617,9 @@ def _run_python_code(
         "retrieve_knowledge": retrieve_knowledge_helper,
         "search_markdown": search_markdown_helper,
         "extract_markdown_records": extract_markdown_records_helper,
+        "load_json_records": load_json_records_helper,
+        "load_json_table": load_json_table_helper,
+        "load_json_df": load_json_table_helper,
     }
     resolved_stdout_path = Path(stdout_path)
     resolved_stderr_path = Path(stderr_path)
@@ -584,6 +633,8 @@ def _run_python_code(
                 "retrieve_knowledge": retrieve_knowledge_helper,
                 "search_markdown": search_markdown_helper,
                 "extract_markdown_records": extract_markdown_records_helper,
+                "load_json_records": load_json_records_helper,
+                "load_json_table": load_json_table_helper,
             }
         )
         with _capture_process_streams(resolved_stdout_path, resolved_stderr_path):
