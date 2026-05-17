@@ -418,11 +418,15 @@ def _python_repair_hints(content: dict[str, object], code: str) -> list[str]:
             "SQLite connection was closed before all queries/fetches finished; reopen the connection "
             "or move every cursor/read_sql operation before conn.close()."
         )
-    if "no module named 'tools'" in lowered or "no module named 'knowledge'" in lowered:
+    if (
+        "no module named 'tools'" in lowered
+        or "no module named 'knowledge'" in lowered
+        or "no module named 'markdown_helpers'" in lowered
+        or "no module named 'utils'" in lowered
+    ):
         add(
             "Helper functions are injected into Python. Call retrieve_knowledge(...), search_markdown(...), "
-            "extract_markdown_records(...), load_json_records(...), or load_json_table(...) directly, or import "
-            "them from the injected tools/json helper modules if available."
+            "extract_markdown_records(...), load_json_records(...), or load_json_table(...) directly."
         )
     if "trying to merge on" in lowered and ("int64" in lowered or "object" in lowered or "str" in lowered):
         add(

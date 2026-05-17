@@ -741,7 +741,7 @@ def test_python_namespace_exposes_json_wrapper_helpers() -> None:
         result = execute_python_code(
             context_path,
             (
-                "from tools import load_json_records, load_json_table\n"
+                "from utils import load_json_records, load_json_table\n"
                 "colour = load_json_table('json/colour.json')\n"
                 "powers = load_json_records('json/power.json')\n"
                 "print(colour.columns.tolist())\n"
@@ -816,13 +816,17 @@ def test_python_markdown_helpers_support_model_style_imports() -> None:
             (
                 "import json\n"
                 "from extract_markdown_records import extract_markdown_records\n"
-                "from tools import retrieve_knowledge, search_markdown\n"
+                "from markdown_helpers import search_markdown\n"
+                "from knowledge import retrieve_knowledge\n"
+                "from data_agent_baseline.tools import search_markdown as package_search, extract_markdown_records as package_extract\n"
                 "records = extract_markdown_records(['races.md'], "
                 "pattern='raceId|year|Australian.*Grand Prix', "
                 "fields=['name', 'circuitId'], include_context=True)\n"
                 "print(json.dumps(records, ensure_ascii=False))\n"
                 "print(retrieve_knowledge(top_k=1)[0]['path'])\n"
-                "print(search_markdown(['raceId'], max_matches=1)[0]['path'])\n"
+                "print(search_markdown(['doc/races.md'], 'Australian Grand Prix', max_matches=1)[0]['path'])\n"
+                "print(package_search(['races.md'], 'Malaysian Grand Prix', max_matches=1)[0]['path'])\n"
+                "print(package_extract(['races.md'], pattern='Malaysian', max_records=1)[0]['path'])\n"
             ),
             timeout_seconds=10,
             question="Find the raceId for the 2008 Australian Grand Prix.",

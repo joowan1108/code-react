@@ -31,7 +31,7 @@ Operational rules:
 1. Treat the manifest in the user message as the initial context inspection.
 2. Do not start by listing files or printing whole documents unless the manifest is clearly insufficient.
 3. First prefer one focused Python script that loads likely relevant files, checks compact schema/samples, and computes a candidate table.
-4. Use pandas for CSV/table files, sqlite3 for databases, `load_json_table(...)` or `load_json_records(...)` for JSON files, and normal file reads for docs.
+4. Use pandas for CSV/table files, sqlite3 for databases, direct `load_json_table(...)` or `load_json_records(...)` calls for JSON files, and normal file reads for docs.
 5. If Python fails, use the traceback as Reflexion and fix the code without repeating the same failed action.
 6. Keep exactly the requested output columns; extra columns are penalized.
 7. Keep Python output concise: print shapes, columns, small samples, and candidate rows, not full files or full dataframes.
@@ -41,8 +41,8 @@ Operational rules:
 11. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 12. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
 13. If the question mentions a concept that is not present as a real table, column, or observed record value, do not assume its meaning. First find the concrete data source that implements it; if it only appears in markdown, map it back to real columns/records before computing.
-14. For JSON files, prefer `load_json_table("json/name.json")` or `load_json_records("json/name.json")`; these helpers unwrap common `{table, records}` JSON wrappers.
-15. Use markdown helpers only as a fallback when structured files do not contain the requested rule, linked prose record, threshold, or coded meaning.
+14. For JSON files, prefer direct `load_json_table("json/name.json")` or `load_json_records("json/name.json")` calls; these helpers unwrap common `{table, records}` JSON wrappers.
+15. Use direct markdown helper calls only as a fallback when structured files do not contain the requested rule, linked prose record, threshold, or coded meaning.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -140,12 +140,12 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "For lowest/highest/min/max/top questions, verify ties and include all tied rows. "
             "For count questions, verify whether the counted entity should be distinct. "
             "For average monthly/yearly questions, verify unit conversion before finalizing. "
-            "For JSON files, prefer `load_json_table(path)` or `load_json_records(path)` so `{table, records}` "
+            "For JSON files, prefer direct `load_json_table(path)` or `load_json_records(path)` calls so `{table, records}` "
             "wrappers are handled correctly. "
             "For SQLite files, rely on the manifest's sqlite_master and PRAGMA schema before writing joins. "
             "Do not assume concepts that are absent from the schema; map every requested concept to a real "
             "table, column, or observed record value before computing. "
-            "Use markdown helpers only when structured CSV/JSON/SQLite evidence is missing or a real rule, "
+            "Use direct markdown helper calls only when structured CSV/JSON/SQLite evidence is missing or a real rule, "
             "threshold, linked prose record, or coded meaning must be retrieved from markdown. "
             "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
         )
@@ -202,7 +202,7 @@ def _markdown_helper_note(task: PublicTask) -> str:
         return ""
     return (
         "Use markdown helpers only after checking structured data. If a needed value, rule, or link is only "
-        "inside document markdown, call `extract_markdown_records([...])` or `search_markdown([...])` for compact "
+        "inside document markdown, call `extract_markdown_records([...])` or `search_markdown([...])` directly for compact "
         "blocks instead of printing whole markdown files. "
     )
 
@@ -221,7 +221,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If a question concept is not present in the schema, do not invent or assume it; find the concrete "
             "column/table/record or markdown rule that implements it, then verify it against observed data. "
-            "For JSON files, prefer `load_json_table(\"json/file.json\")` or `load_json_records(\"json/file.json\")` "
+            "For JSON files, prefer direct `load_json_table(\"json/file.json\")` or `load_json_records(\"json/file.json\")` calls "
             "instead of manually guessing whether the payload is a list or a `{table, records}` wrapper. "
             f"{_markdown_helper_note(task)}"
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
