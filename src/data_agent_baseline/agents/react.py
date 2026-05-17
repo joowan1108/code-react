@@ -51,7 +51,9 @@ PLANNING_NODES = (
         (),
         "Understand structured data first: inspect files/tables, schema, join "
         "keys, and available columns; use markdown retrieval only for coded "
-        "meanings, rules, thresholds, or ambiguous terms.",
+        "meanings, rules, thresholds, or ambiguous terms. If a requested concept "
+        "is absent from the schema, find the real column/table/record or markdown "
+        "rule that implements it before computing.",
     ),
     (
         "target_columns",
@@ -771,7 +773,8 @@ def _build_planning_context(
     lines.append(
         "Priority: first link schema and decide exact final columns; then map "
         "question terms to real columns/values; submit as soon as the answer is "
-        "supported, with no helper columns."
+        "supported, with no helper columns. Never assume schema-absent concepts; "
+        "verify their concrete data source first."
     )
     prompt_prefix = "\n".join(lines)
     snapshot = {

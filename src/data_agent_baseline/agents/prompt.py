@@ -40,6 +40,8 @@ Operational rules:
 10. If the question asks to list/all/which rows, include every matching row, not only the first one.
 11. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 12. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
+13. If the question mentions a concept that is not present as a real table, column, or observed record value, do not assume its meaning. First find the concrete data source that implements it; if it only appears in markdown, map it back to real columns/records before computing.
+14. For markdown-heavy tasks, prefer targeted `search_markdown([...])` or `retrieve_knowledge(...)` snippets over printing whole documents or writing broad regexes before you understand the local text pattern.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -138,6 +140,10 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "For count questions, verify whether the counted entity should be distinct. "
             "For average monthly/yearly questions, verify unit conversion before finalizing. "
             "For SQLite files, rely on the manifest's sqlite_master and PRAGMA schema before writing joins. "
+            "Do not assume concepts that are absent from the schema; map every requested concept to a real "
+            "table, column, or observed record value before computing. "
+            "For markdown-heavy tasks, use targeted `search_markdown([...])` snippets to inspect local context "
+            "around IDs, event names, thresholds, or coded values instead of printing whole documents. "
             "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
         )
     else:
@@ -195,6 +201,8 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "All file paths are relative to the task context directory. "
             "For SQLite files, the manifest includes sqlite_master plus PRAGMA table_info/foreign_key_list details; "
             "use those exact table and column names for joins. "
+            "If a question concept is not present in the schema, do not invent or assume it; find the concrete "
+            "column/table/record or markdown rule that implements it, then verify it against observed data. "
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
             "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
             f"{_knowledge_reminder(task)}"

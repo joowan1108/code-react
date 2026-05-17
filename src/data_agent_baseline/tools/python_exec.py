@@ -81,6 +81,85 @@ def _read_captured_stream(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _relative_path(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _normalize_search_terms(terms: object) -> list[str]:
+    if isinstance(terms, str):
+        raw_terms = [terms]
+    elif isinstance(terms, (list, tuple, set)):
+        raw_terms = [str(term) for term in terms]
+    else:
+        raw_terms = [str(terms)]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for term in raw_terms:
+        value = term.strip()
+        if not value or value.casefold() in seen:
+            continue
+        seen.add(value.casefold())
+        normalized.append(value)
+    return normalized
+
+
+def search_markdown_documents(
+    context_root: str | Path,
+    terms: object,
+    *,
+    max_matches: int = 8,
+    context_chars: int = 500,
+) -> list[dict[str, object]]:
+    """Return compact snippets around term matches in markdown documents."""
+
+    root = Path(context_root).resolve()
+    search_terms = _normalize_search_terms(terms)
+    if not search_terms:
+        return []
+
+    matches: list[dict[str, object]] = []
+    try:
+        paths = sorted(root.rglob("*.md"))
+    except Exception:  # noqa: BLE001
+        return []
+
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        lowered = text.casefold()
+        for term in search_terms:
+            start_at = 0
+            lowered_term = term.casefold()
+            while len(matches) < max_matches:
+                index = lowered.find(lowered_term, start_at)
+                if index < 0:
+                    break
+                start = max(0, index - max(0, context_chars))
+                end = min(len(text), index + len(term) + max(0, context_chars))
+                snippet = text[start:end].strip()
+                if start > 0:
+                    snippet = "..." + snippet
+                if end < len(text):
+                    snippet += "..."
+                matches.append(
+                    {
+                        "path": _relative_path(path, root),
+                        "matched_term": term,
+                        "start": index,
+                        "snippet": snippet,
+                    }
+                )
+                start_at = index + max(1, len(term))
+            if len(matches) >= max_matches:
+                return matches
+    return matches
+
+
 def _run_python_code(
     context_root: str,
     working_dir: str,
@@ -113,6 +192,11 @@ def _run_python_code(
         "retrieve_knowledge": lambda **kwargs: retrieve_knowledge_snippets(
             resolved_context_root,
             question,
+            **kwargs,
+        ),
+        "search_markdown": lambda terms, **kwargs: search_markdown_documents(
+            resolved_context_root,
+            terms,
             **kwargs,
         ),
     }

@@ -585,6 +585,30 @@ def test_python_namespace_exposes_retrieve_knowledge_with_task_question() -> Non
         assert "value 2 means severe thrombosis" in result["output"]
 
 
+def test_python_namespace_exposes_search_markdown_snippets() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "doc").mkdir()
+        (context_path / "doc" / "budget.md").write_text(
+            "Intro text.\n\n"
+            "The Advertisement allocation for Yearly Kickoff links to budget recA with amount 300.\n\n"
+            "The Advertisement allocation for October Meeting links to budget recB with amount 110.\n",
+            encoding="utf-8",
+        )
+
+        result = execute_python_code(
+            context_path,
+            "import json\nprint(json.dumps(search_markdown(['Yearly Kickoff', 'October Meeting'], max_matches=2, context_chars=60)))",
+            timeout_seconds=10,
+            question="How many times was the budget in Advertisement for Yearly Kickoff more than October Meeting?",
+        )
+
+        assert result["success"]
+        assert "doc/budget.md" in result["output"]
+        assert "Yearly Kickoff" in result["output"]
+        assert "October Meeting" in result["output"]
+
+
 def test_codeact_scripted_task_11() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         config = AppConfig(
