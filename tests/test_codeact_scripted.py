@@ -663,6 +663,40 @@ def test_python_namespace_exposes_search_markdown_snippets() -> None:
         assert "October Meeting" in result["output"]
 
 
+def test_python_namespace_exposes_markdown_record_graph() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "doc").mkdir()
+        (context_path / "doc" / "budget.md").write_text(
+            "The Yearly Kickoff event is linked to event record recEventYear.\n\n"
+            "For event record recEventYear, the Advertisement allocation uses budget recBudgetYear.\n\n"
+            "Budget recBudgetYear has approved amount $300.\n\n"
+            "The October Meeting event is linked to event record recEventOct.\n\n"
+            "For event record recEventOct, the Advertisement allocation uses budget recBudgetOct.\n\n"
+            "Budget recBudgetOct has approved amount $100.\n",
+            encoding="utf-8",
+        )
+
+        result = execute_python_code(
+            context_path,
+            (
+                "import json\n"
+                "records = extract_markdown_records(['Yearly Kickoff', 'October Meeting'], max_records=8)\n"
+                "print(json.dumps(records, ensure_ascii=False))"
+            ),
+            timeout_seconds=10,
+            question='How many times was the budget in Advertisement for "Yearly Kickoff" more than "October Meeting"?',
+        )
+
+        assert result["success"]
+        assert "recEventYear" in result["output"]
+        assert "recBudgetYear" in result["output"]
+        assert "$300" in result["output"]
+        assert "recEventOct" in result["output"]
+        assert "recBudgetOct" in result["output"]
+        assert "$100" in result["output"]
+
+
 def test_codeact_scripted_task_11() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         config = AppConfig(

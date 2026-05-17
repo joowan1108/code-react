@@ -160,6 +160,248 @@ def search_markdown_documents(
     return matches
 
 
+MARKDOWN_RECORD_ID_PATTERN = re.compile(
+    r"\brec(?=[A-Za-z0-9]{6,20}\b)(?=[A-Za-z0-9]*[0-9A-Z])[A-Za-z0-9]{6,20}\b|"
+    r"\b(?:[A-Za-z][A-Za-z0-9_ -]{0,30})?(?:id|ID)\s*[:=]\s*['\"]?[A-Za-z0-9_.:-]+['\"]?"
+)
+MARKDOWN_NUMBER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:[$]\s*)?[-+]?\d[\d,]*(?:\.\d+)?\s*%?"
+)
+
+
+def _question_markdown_terms(question: str) -> list[str]:
+    quoted = [
+        match.group(1) or match.group(2)
+        for match in re.finditer(r'"([^"]+)"|\'([^\']+)\'', question)
+    ]
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z0-9]+", question)
+        if len(token) > 3
+        and token.casefold()
+        not in {
+            "what",
+            "which",
+            "where",
+            "when",
+            "many",
+            "much",
+            "more",
+            "than",
+            "with",
+            "from",
+            "that",
+            "this",
+            "were",
+            "have",
+            "does",
+            "into",
+            "only",
+        }
+    ]
+    return _normalize_search_terms([*quoted, *tokens])
+
+
+def _split_markdown_blocks(text: str) -> list[tuple[str | None, str]]:
+    blocks: list[tuple[str | None, str]] = []
+    current_heading: str | None = None
+    pieces = re.split(r"\n\s*\n", text)
+    for piece in pieces:
+        block = piece.strip()
+        if not block:
+            continue
+        heading_match = re.match(r"^(#{1,6}\s+.+)$", block)
+        if heading_match is not None:
+            current_heading = heading_match.group(1).strip()
+        blocks.append((current_heading, block))
+    return blocks
+
+
+def _markdown_record_summary(
+    *,
+    root: Path,
+    path: Path,
+    block_index: int,
+    heading: str | None,
+    text: str,
+    matched_terms: list[str],
+    linked_from_ids: list[str] | None = None,
+    max_chars: int,
+) -> dict[str, object]:
+    ids = []
+    seen_ids: set[str] = set()
+    for match in MARKDOWN_RECORD_ID_PATTERN.finditer(text):
+        value = match.group(0).strip().strip("'\"")
+        if value.casefold() in seen_ids:
+            continue
+        seen_ids.add(value.casefold())
+        ids.append(value)
+
+    numbers = []
+    seen_numbers: set[str] = set()
+    for match in MARKDOWN_NUMBER_PATTERN.finditer(text):
+        value = match.group(0).strip()
+        if value.casefold() in seen_numbers:
+            continue
+        seen_numbers.add(value.casefold())
+        numbers.append(value)
+
+    snippet = text
+    if len(snippet) > max_chars:
+        snippet = snippet[:max_chars].rstrip() + "\n...[record snippet truncated]"
+
+    return {
+        "path": _relative_path(path, root),
+        "block_index": block_index,
+        "heading": heading,
+        "matched_terms": matched_terms,
+        "linked_from_ids": linked_from_ids or [],
+        "ids": ids[:20],
+        "numbers": numbers[:20],
+        "snippet": snippet,
+    }
+
+
+def extract_markdown_records(
+    context_root: str | Path,
+    terms: object = None,
+    *,
+    question: str = "",
+    max_records: int = 12,
+    max_chars: int = 900,
+    include_linked_ids: bool = True,
+    link_depth: int = 2,
+) -> list[dict[str, object]]:
+    """Return markdown blocks as lightweight record/link candidates.
+
+    This is meant for documents that encode entities through record IDs, nearby
+    numbers, and cross references. It searches term-matched blocks first, then
+    optionally follows IDs found in those blocks to other blocks.
+    """
+
+    root = Path(context_root).resolve()
+    search_terms = _normalize_search_terms(terms) if terms is not None else _question_markdown_terms(question)
+    lowered_terms = [(term, term.casefold()) for term in search_terms]
+    try:
+        paths = sorted(root.rglob("*.md"))
+    except Exception:  # noqa: BLE001
+        return []
+
+    all_blocks: list[tuple[Path, int, str | None, str]] = []
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        for block_index, (heading, block) in enumerate(_split_markdown_blocks(text)):
+            all_blocks.append((path, block_index, heading, block))
+
+    scored: list[tuple[float, Path, int, str | None, str, list[str]]] = []
+    for path, block_index, heading, block in all_blocks:
+        lowered_block = block.casefold()
+        matched_terms = [term for term, lowered in lowered_terms if lowered and lowered in lowered_block]
+        ids = MARKDOWN_RECORD_ID_PATTERN.findall(block)
+        numbers = MARKDOWN_NUMBER_PATTERN.findall(block)
+
+        if lowered_terms and not matched_terms:
+            continue
+        if not lowered_terms and not ids and not numbers:
+            continue
+
+        score = (4.0 * len(matched_terms)) + (0.8 * min(len(ids), 5)) + (0.4 * min(len(numbers), 5))
+        if heading and any(lowered in heading.casefold() for _, lowered in lowered_terms):
+            score += 2.0
+        scored.append((score, path, block_index, heading, block, matched_terms))
+
+    scored.sort(key=lambda item: (-item[0], _relative_path(item[1], root), item[2]))
+    selected: list[tuple[float, Path, int, str | None, str, list[str]]] = []
+    selected_keys: set[tuple[str, int]] = set()
+    for term in search_terms:
+        for item in scored:
+            _, path, block_index, _, _, matched_terms = item
+            key = (str(path), block_index)
+            if key in selected_keys or term not in matched_terms:
+                continue
+            selected.append(item)
+            selected_keys.add(key)
+            break
+        if len(selected) >= max_records:
+            break
+    for item in scored:
+        if len(selected) >= max(1, max_records):
+            break
+        _, path, block_index, _, _, _ = item
+        key = (str(path), block_index)
+        if key in selected_keys:
+            continue
+        selected.append(item)
+        selected_keys.add(key)
+    results: list[dict[str, object]] = [
+        _markdown_record_summary(
+            root=root,
+            path=path,
+            block_index=block_index,
+            heading=heading,
+            text=block,
+            matched_terms=matched_terms,
+            max_chars=max_chars,
+        )
+        for _, path, block_index, heading, block, matched_terms in selected
+    ]
+
+    if include_linked_ids and len(results) < max_records:
+        selected_keys = {(str(path), block_index) for _, path, block_index, _, _, _ in selected}
+        seen_seed_ids: set[str] = set()
+        frontier_ids: list[str] = []
+        for result in results:
+            for value in result.get("ids", []):
+                text_value = str(value)
+                if text_value.casefold() in seen_seed_ids:
+                    continue
+                seen_seed_ids.add(text_value.casefold())
+                frontier_ids.append(text_value)
+
+        for _ in range(max(0, link_depth)):
+            if not frontier_ids or len(results) >= max_records:
+                break
+            linked: list[tuple[int, Path, int, str | None, str, list[str]]] = []
+            for path, block_index, heading, block in all_blocks:
+                key = (str(path), block_index)
+                if key in selected_keys:
+                    continue
+                matched_ids = [record_id for record_id in frontier_ids if record_id and record_id in block]
+                if not matched_ids:
+                    continue
+                linked.append((len(matched_ids), path, block_index, heading, block, matched_ids))
+
+            linked.sort(key=lambda item: (-item[0], _relative_path(item[1], root), item[2]))
+            next_frontier: list[str] = []
+            for _, path, block_index, heading, block, matched_ids in linked:
+                if len(results) >= max_records:
+                    break
+                selected_keys.add((str(path), block_index))
+                summary = _markdown_record_summary(
+                    root=root,
+                    path=path,
+                    block_index=block_index,
+                    heading=heading,
+                    text=block,
+                    matched_terms=[],
+                    linked_from_ids=matched_ids,
+                    max_chars=max_chars,
+                )
+                results.append(summary)
+                for value in summary.get("ids", []):
+                    text_value = str(value)
+                    if text_value.casefold() in seen_seed_ids:
+                        continue
+                    seen_seed_ids.add(text_value.casefold())
+                    next_frontier.append(text_value)
+            frontier_ids = next_frontier
+
+    return results
+
+
 def _run_python_code(
     context_root: str,
     working_dir: str,
@@ -197,6 +439,12 @@ def _run_python_code(
         "search_markdown": lambda terms, **kwargs: search_markdown_documents(
             resolved_context_root,
             terms,
+            **kwargs,
+        ),
+        "extract_markdown_records": lambda terms=None, **kwargs: extract_markdown_records(
+            resolved_context_root,
+            terms,
+            question=question,
             **kwargs,
         ),
     }
