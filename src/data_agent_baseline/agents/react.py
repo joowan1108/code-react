@@ -43,14 +43,15 @@ FINAL_RESULT_MARKERS = (
     "ANSWER_CANDIDATE:",
 )
 
-PLANNING_DIFFICULTIES = {"hard", "extreme"}
+PLANNING_DIFFICULTIES = {"medium", "hard", "extreme"}
 
 PLANNING_NODES = (
     (
         "schema_linking",
         (),
-        "Understand the data first: inspect files/tables, schema, join keys, "
-        "markdown docs, and available columns.",
+        "Understand structured data first: inspect files/tables, schema, join "
+        "keys, and available columns; use markdown retrieval only for coded "
+        "meanings, rules, thresholds, or ambiguous terms.",
     ),
     (
         "target_columns",

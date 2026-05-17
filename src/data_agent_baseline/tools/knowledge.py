@@ -200,9 +200,9 @@ def retrieve_knowledge_snippets(
     max_chars: int = 1200,
     include_schema_terms: bool = True,
 ) -> list[dict[str, object]]:
-    """Search knowledge.md using the question plus schema column/table names.
+    """Search markdown documents using the question plus schema column/table names.
 
-    The full knowledge file is scanned, but only compact relevant snippets are returned.
+    Full markdown files are scanned, but only compact relevant snippets are returned.
     """
 
     root = Path(context_root).resolve()
@@ -215,7 +215,7 @@ def retrieve_knowledge_snippets(
         schema_tokens.update(_tokenize(str(term)))
 
     hits: list[tuple[float, str, str, list[str], list[str]]] = []
-    for path in sorted(root.rglob("knowledge.md")):
+    for path in sorted(root.rglob("*.md")):
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except Exception:  # noqa: BLE001

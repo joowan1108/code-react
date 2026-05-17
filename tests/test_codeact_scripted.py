@@ -187,7 +187,7 @@ def test_runtime_instruction_does_not_report_current_step() -> None:
         temp_context.cleanup()
 
 
-def test_medium_task_does_not_use_planning_prefix() -> None:
+def test_medium_planning_prefix_is_front_of_model_input() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -206,9 +206,29 @@ def test_medium_task_does_not_use_planning_prefix() -> None:
             step_index=1,
             max_steps=16,
         )
+        agent = ReActAgent(
+            model=ScriptedModelAdapter([]),
+            tools=ToolRegistry(specs={}, handlers={}),
+            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
+        )
 
-        assert planning_instruction is None
-        assert planning_snapshot is None
+        messages = agent._build_messages(
+            task,
+            state,
+            front_instruction=planning_instruction,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        assert messages[0].role == "system"
+        assert messages[1].content.startswith("PLANNING PREFIX")
+        assert "schema_linking" in messages[1].content
+        assert "target_columns" in messages[1].content
+        assert "Progress: model call 1/16" in messages[1].content
+        assert "completed=" not in messages[1].content
+        assert "done" not in messages[1].content
+        assert "observed_signals" in messages[1].content
+        assert "Return the average score by group." in messages[2].content
 
 
 def test_hard_planning_prefix_is_front_of_model_input() -> None:
@@ -519,6 +539,31 @@ def test_retrieve_knowledge_uses_full_document_and_schema_terms() -> None:
         rendered = json.dumps(snippets, ensure_ascii=False)
         assert "Value 2 indicates severe thrombosis" in rendered
         assert "thrombosis" in snippets[0]["matched_schema_terms"]
+
+
+def test_retrieve_knowledge_searches_non_knowledge_markdown() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "csv").mkdir()
+        (context_path / "doc").mkdir()
+        (context_path / "csv" / "cards.csv").write_text(
+            "id,legalStatus\n1,legal\n",
+            encoding="utf-8",
+        )
+        (context_path / "doc" / "legalities.md").write_text(
+            "Legal status indicates whether a card is legal, banned, or restricted in a format.",
+            encoding="utf-8",
+        )
+
+        snippets = retrieve_knowledge_snippets(
+            context_path,
+            "What does legal status mean?",
+            top_k=1,
+        )
+
+        assert snippets
+        assert snippets[0]["path"] == "doc/legalities.md"
+        assert "legal, banned, or restricted" in snippets[0]["snippet"]
 
 
 def test_python_namespace_exposes_retrieve_knowledge_with_task_question() -> None:

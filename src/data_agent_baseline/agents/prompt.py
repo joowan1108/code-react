@@ -170,7 +170,7 @@ def _knowledge_reminder(task: PublicTask) -> str:
     if not (_tokens(task.question) & KNOWLEDGE_TRIGGER_TERMS):
         return ""
     try:
-        has_knowledge = any(task.context_dir.rglob("knowledge.md"))
+        has_knowledge = any(task.context_dir.rglob("*.md"))
     except Exception:  # noqa: BLE001
         has_knowledge = False
     if not has_knowledge:
