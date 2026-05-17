@@ -13,12 +13,14 @@ from data_agent_baseline.agents.react import (
     ReActAgent,
     ReActAgentConfig,
     _build_planning_context,
+    _final_answer_check,
+    _python_repair_hints,
     _render_observation_for_prompt,
     parse_model_step,
 )
 from data_agent_baseline.agents.runtime import AgentRuntimeState, StepRecord
 from data_agent_baseline.benchmark.evaluate import score_prediction_csv
-from data_agent_baseline.benchmark.schema import PublicTask, TaskAssets, TaskRecord
+from data_agent_baseline.benchmark.schema import AnswerTable, PublicTask, TaskAssets, TaskRecord
 from data_agent_baseline.config import AgentConfig, AppConfig, DatasetConfig, RunConfig
 from data_agent_baseline.run.runner import run_single_task
 from data_agent_baseline.tools.knowledge import retrieve_knowledge_snippets
@@ -185,6 +187,52 @@ def test_runtime_instruction_does_not_report_current_step() -> None:
         assert "Finalization window" not in recovery_instruction
     finally:
         temp_context.cleanup()
+
+
+def test_python_repair_hints_for_common_runtime_errors() -> None:
+    hints = _python_repair_hints(
+        {
+            "success": False,
+            "error": "Cannot operate on a closed database.",
+            "traceback": "sqlite3.ProgrammingError: Cannot operate on a closed database.",
+        },
+        "conn.close()\ncursor.execute('select 1')",
+    )
+    assert any("closed" in hint.lower() for hint in hints)
+
+    import_hints = _python_repair_hints(
+        {
+            "success": False,
+            "error": "No module named 'tools'",
+            "traceback": "ModuleNotFoundError: No module named 'tools'",
+        },
+        "from tools import retrieve_knowledge\nretrieve_knowledge()",
+    )
+    assert any("call them directly" in hint for hint in import_hints)
+
+
+def test_final_answer_check_warns_about_likely_extra_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_extra",
+                difficulty="medium",
+                question="List the names of schools.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        check = _final_answer_check(
+            task,
+            AnswerTable(
+                columns=["School Name", "debug_score"],
+                rows=[["A", 0.9]],
+            ),
+        )
+
+        assert check["question_type"] == "row_list"
+        assert check["warnings"]
+        assert "debug_score" in check["warnings"][0]
 
 
 def test_medium_planning_prefix_is_front_of_model_input() -> None:

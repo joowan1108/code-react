@@ -401,6 +401,129 @@ def _answer_preview(answer: AnswerTable, *, max_rows: int = 3) -> dict[str, obje
     }
 
 
+def _python_repair_hints(content: dict[str, object], code: str) -> list[str]:
+    text = "\n".join(
+        str(content.get(key) or "")
+        for key in ("error", "traceback", "stderr", "output", "stdout")
+    )
+    lowered = text.casefold()
+    hints: list[str] = []
+
+    def add(hint: str) -> None:
+        if hint not in hints:
+            hints.append(hint)
+
+    if "cannot operate on a closed database" in lowered:
+        add(
+            "SQLite connection was closed before all queries/fetches finished; reopen the connection "
+            "or move every cursor/read_sql operation before conn.close()."
+        )
+    if "no module named 'tools'" in lowered or "no module named 'knowledge'" in lowered:
+        add(
+            "retrieve_knowledge(...) and search_markdown(...) are already injected Python functions; "
+            "call them directly instead of importing from tools or knowledge."
+        )
+    if "trying to merge on" in lowered and ("int64" in lowered or "object" in lowered or "str" in lowered):
+        add(
+            "Join keys have mismatched dtypes; print key samples, then cast both sides to comparable "
+            "strings, preserving leading zeros for IDs/codes."
+        )
+    if "no such table" in lowered:
+        add("SQLite table name is wrong; inspect sqlite_master or use the exact table names from the manifest.")
+    if "no such column" in lowered:
+        add("Column name is wrong; inspect PRAGMA table_info or dataframe columns and use exact names.")
+    if "keyerror" in lowered:
+        add("Pandas KeyError usually means an exact column mismatch; print df.columns.tolist() before selecting.")
+    if "file not found" in lowered or "no such file or directory" in lowered:
+        add("Use paths relative to the task context directory exactly as shown in the manifest.")
+    if "timed out" in lowered:
+        add("Reduce work and output: filter first, avoid printing full files/dataframes, and inspect compact samples.")
+    if re.search(r"\bempty dataframe\b|\b0 rows\b|shape:\s*\(0[,)]", lowered):
+        add("Result is empty; verify filters, join keys, casing, and whether the entity should be matched in another table/document.")
+    if "final_table_json" in code.casefold() and not bool(content.get("success")):
+        add("Do not print FINAL_TABLE_JSON until the code has computed the exact final answer without errors.")
+
+    return hints[:4]
+
+
+def _likely_question_type(question: str) -> str:
+    if _question_is_single_value(question):
+        return "single_value"
+    if _question_expects_nonempty_rows(question):
+        return "row_list"
+    return "table"
+
+
+def _final_answer_check(task: PublicTask, answer: AnswerTable) -> dict[str, object]:
+    question_type = _likely_question_type(task.question)
+    question_tokens = _split_identifier_tokens(task.question)
+    warnings: list[str] = []
+    notes: list[str] = []
+
+    if question_type == "single_value":
+        if len(answer.columns) != 1 or len(answer.rows) != 1:
+            warnings.append("single-value question should usually submit exactly one column and one row")
+        else:
+            notes.append("single-value shape looks plausible")
+    elif question_type == "row_list":
+        if not answer.rows:
+            warnings.append("question appears to expect matching rows, but candidate answer is empty")
+        else:
+            notes.append("row-list answer is non-empty")
+
+    helper_terms = {
+        "debug",
+        "helper",
+        "index",
+        "rank",
+        "row",
+        "score",
+        "avg",
+        "average",
+        "sum",
+        "total",
+        "count",
+        "ratio",
+        "percentage",
+        "percent",
+        "id",
+        "ids",
+        "code",
+        "key",
+    }
+    possible_helper_columns: list[str] = []
+    for column in answer.columns:
+        column_tokens = _split_identifier_tokens(column)
+        helper_overlap = column_tokens & helper_terms
+        if helper_overlap and not helper_overlap <= question_tokens:
+            possible_helper_columns.append(column)
+    if possible_helper_columns:
+        warnings.append(
+            "possible helper/extra columns not clearly requested: "
+            + ", ".join(possible_helper_columns[:5])
+        )
+
+    if any(token in question_tokens for token in {"percentage", "percent", "ratio", "average", "avg", "mean"}):
+        if len(answer.rows) == 1 and len(answer.columns) == 1:
+            value = answer.rows[0][0] if answer.rows and answer.rows[0] else None
+            if isinstance(value, str):
+                normalized = value.strip().rstrip("%").replace(",", "")
+            else:
+                normalized = str(value)
+            try:
+                float(normalized)
+            except (TypeError, ValueError):
+                warnings.append("numeric aggregate question produced a non-numeric-looking value")
+
+    return {
+        "question_type": question_type,
+        "columns": list(answer.columns),
+        "row_count": len(answer.rows),
+        "warnings": warnings,
+        "notes": notes,
+    }
+
+
 def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, object] | None:
     lower_text = text.lower()
     marker_positions = [
@@ -1103,11 +1226,25 @@ class ReActAgent:
 
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 content = dict(tool_result.content)
+                if model_step.action == "execute_python":
+                    repair_hints = _python_repair_hints(
+                        content,
+                        str(model_step.action_input.get("code") or ""),
+                    )
+                    if repair_hints:
+                        content["repair_hints"] = repair_hints
+                elif model_step.action == "answer":
+                    direct_answer = _answer_table_from_payload(model_step.action_input)
+                    if direct_answer is not None:
+                        content["final_answer_check"] = _final_answer_check(task, direct_answer)
                 observation = {
                     "ok": tool_result.ok,
                     "tool": model_step.action,
                     "content": content,
                 }
+                candidate_answer = self._candidate_answer_from_observation(task, observation)
+                if candidate_answer is not None:
+                    content["final_answer_check"] = _final_answer_check(task, candidate_answer)
                 step_record = StepRecord(
                     step_index=step_index,
                     thought=model_step.thought,
@@ -1118,7 +1255,6 @@ class ReActAgent:
                     ok=tool_result.ok,
                 )
                 self._append_step(task, state, step_record)
-                candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
                     decision = _candidate_decision_from_observation(task, observation, candidate_answer)
                     self._checkpoint(
