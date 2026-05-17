@@ -44,6 +44,7 @@ FINAL_RESULT_MARKERS = (
 )
 
 PLANNING_DIFFICULTIES = {"medium", "hard", "extreme"}
+LINKING_REQUIREMENT_DIFFICULTIES = {"hard", "extreme"}
 
 PLANNING_NODES = (
     (
@@ -87,8 +88,14 @@ PLANNING_NODES = (
     (
         "final_verify",
         ("aggregate_select",),
-        "Verify ties/all rows/distinctness/units and submit exactly the final "
+        "Verify ties/all rows/distinctness/units and prepare exactly the final "
         "requested columns.",
+    ),
+    (
+        "answer_submission",
+        ("final_verify",),
+        "Submit the answer now with exactly the requested columns and rows. "
+        "Do not run additional exploration after the final result is supported.",
     ),
 )
 
@@ -105,6 +112,48 @@ MEDIUM_PLANNING_NODES = (
         "Decide the exact requested final answer columns and exclude helper, filter, "
         "sort, join, or explanation columns.",
     ),
+    (
+        "answer_submission",
+        ("target_columns",),
+        "Once the result is computed, submit Answer with only the requested columns. "
+        "Do not add helper columns.",
+    ),
+)
+
+LINKING_TRIGGER_TERMS = {
+    "abnormal",
+    "classification",
+    "code",
+    "coded",
+    "diagnosis",
+    "disease",
+    "legal",
+    "meaning",
+    "normal",
+    "range",
+    "rule",
+    "severe",
+    "status",
+    "threshold",
+    "warning",
+}
+
+RESULT_SIGNAL_TERMS = (
+    "final:",
+    "final answer",
+    "final table",
+    "final_table_json",
+    "answer_candidate",
+    "percentage",
+    "ratio",
+    "total ",
+    "total:",
+    "count ",
+    "count:",
+    "row_count",
+    "rows:",
+    "result",
+    "computed",
 )
 
 
@@ -742,6 +791,48 @@ def _task_uses_planning(task: PublicTask) -> bool:
     return task.difficulty.casefold() in PLANNING_DIFFICULTIES
 
 
+def _task_has_markdown(task: PublicTask) -> bool:
+    try:
+        return any(task.context_dir.rglob("*.md"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _question_has_linking_cues(question: str) -> bool:
+    if re.search(r'"[^"]+"|\'[^\']+\'', question):
+        return True
+    if _split_identifier_tokens(question) & LINKING_TRIGGER_TERMS:
+        return True
+    capitalized_phrases = re.findall(
+        r"\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*)+\b",
+        question,
+    )
+    return any(len(phrase) >= 6 for phrase in capitalized_phrases)
+
+
+def _step_called_linking_helper(step: StepRecord) -> bool:
+    action_input = _safe_json_dumps(step.action_input).lower()
+    raw_response = step.raw_response.lower()
+    return "link_question_to_data" in action_input or "link_question_to_data" in raw_response
+
+
+def _has_called_linking_helper(state: AgentRuntimeState) -> bool:
+    return any(_step_called_linking_helper(step) for step in state.steps)
+
+
+def _should_require_link_question_to_data(task: PublicTask, state: AgentRuntimeState) -> bool:
+    if task.difficulty.casefold() not in LINKING_REQUIREMENT_DIFFICULTIES:
+        return False
+    if _has_called_linking_helper(state):
+        return False
+    if not _task_has_markdown(task):
+        return False
+    if not _question_has_linking_cues(task.question):
+        return False
+    successful_python_steps = sum(1 for step in state.steps if step.action == "execute_python" and step.ok)
+    return successful_python_steps < 2
+
+
 def _step_text_for_planning(step: StepRecord) -> str:
     parts = [step.action, step.thought, step.raw_response[:1200]]
     content = step.observation.get("content")
@@ -755,6 +846,29 @@ def _step_text_for_planning(step: StepRecord) -> str:
         if error:
             parts.append(str(error)[:600])
     return "\n".join(parts).lower()
+
+
+def _recent_result_signal(state: AgentRuntimeState) -> bool:
+    recent_text = "\n".join(_step_text_for_planning(step) for step in state.steps[-2:])
+    return any(term in recent_text for term in RESULT_SIGNAL_TERMS)
+
+
+def _should_prioritize_answer_submission(
+    state: AgentRuntimeState,
+    fallback_answer: AnswerTable | None,
+    *,
+    step_index: int,
+    max_steps: int,
+) -> bool:
+    if fallback_answer is not None:
+        return True
+    successful_python_steps = [step for step in state.steps if step.action == "execute_python" and step.ok]
+    if not successful_python_steps:
+        return False
+    remaining_calls = max_steps - step_index + 1
+    if remaining_calls <= 2:
+        return True
+    return remaining_calls <= 4 and _recent_result_signal(state)
 
 
 def _planning_observed_nodes(
@@ -848,7 +962,11 @@ def _planning_observed_nodes(
             "sort_values",
         )
     ):
-        observed.update(node_id for node_id, _, _ in PLANNING_NODES[:-1])
+        observed.update(
+            node_id
+            for node_id, _, _ in PLANNING_NODES
+            if node_id != "answer_submission"
+        )
     if has_terminal_answer:
         observed.update(node_id for node_id, _, _ in PLANNING_NODES)
     return observed
@@ -888,6 +1006,17 @@ def _planning_status(
     return node_records, current_focus, observed_nodes
 
 
+def _force_planning_focus(
+    node_records: list[dict[str, object]],
+    node_id: str,
+) -> None:
+    for node in node_records:
+        if node.get("status") == "focus":
+            node["status"] = "later"
+        if node.get("id") == node_id and node.get("status") != "observed":
+            node["status"] = "focus"
+
+
 def _build_planning_context(
     task: PublicTask,
     state: AgentRuntimeState,
@@ -900,12 +1029,22 @@ def _build_planning_context(
         return None, None
 
     difficulty = task.difficulty.casefold()
+    answer_urgent = _should_prioritize_answer_submission(
+        state,
+        fallback_answer,
+        step_index=step_index,
+        max_steps=max_steps,
+    )
+    require_linking_helper = _should_require_link_question_to_data(task, state)
     if difficulty == "medium":
         node_records, current_focus, observed_nodes = _planning_status(
             state,
             fallback_answer,
             MEDIUM_PLANNING_NODES,
         )
+        if answer_urgent:
+            _force_planning_focus(node_records, "answer_submission")
+            current_focus = "answer_submission"
         lines = [
             "PLANNING PREFIX - medium task light schema/final-column checklist.",
             "This compact checklist is inserted at the front of every model input for this task.",
@@ -925,6 +1064,12 @@ def _build_planning_context(
             "answer columns, then compute and submit with no helper columns. Do not follow the "
             "full multi-stage planning graph for medium tasks."
         )
+        if answer_urgent:
+            lines.append(
+                "FINAL-STEPS SUBMISSION RULE: if the latest observation contains the requested "
+                "rows, count, percentage, or value, return `Answer:` now. Run code only if a "
+                "required requested value is still missing."
+            )
         prompt_prefix = "\n".join(lines)
         snapshot = {
             "enabled": True,
@@ -932,6 +1077,8 @@ def _build_planning_context(
             "difficulty": task.difficulty,
             "step_index": step_index,
             "max_steps": max_steps,
+            "remaining_model_calls": max_steps - step_index + 1,
+            "answer_submission_urgent": answer_urgent,
             "model_input_position": "front_after_system_before_task_prompt",
             "current_focus": current_focus,
             "observed_nodes": observed_nodes,
@@ -941,6 +1088,9 @@ def _build_planning_context(
         return prompt_prefix, snapshot
 
     node_records, current_focus, observed_nodes = _planning_status(state, fallback_answer)
+    if answer_urgent:
+        _force_planning_focus(node_records, "answer_submission")
+        current_focus = "answer_submission"
     lines = [
         "PLANNING PREFIX - hard/extreme task working checklist.",
         "This checklist is inserted at the front of every model input for this task.",
@@ -962,12 +1112,29 @@ def _build_planning_context(
         "supported, with no helper columns. Never assume schema-absent concepts; "
         "verify their concrete data source first."
     )
+    if require_linking_helper:
+        lines.append(
+            "GROUNDED-LINK REQUIREMENT: in your next Python step, call "
+            "`link_question_to_data(max_candidates=5)` before any broad markdown search. "
+            "Use its row_ids, usable_filter, value_matches, and join_candidates to connect "
+            "question mentions or markdown records to real data. You may continue the "
+            "actual computation in the same code block after this call."
+        )
+    if answer_urgent:
+        lines.append(
+            "FINAL-STEPS SUBMISSION RULE: if the latest observation contains the requested "
+            "rows, count, percentage, or value, return `Answer:` now. Do not run another "
+            "exploratory script unless a required requested value is still missing."
+        )
     prompt_prefix = "\n".join(lines)
     snapshot = {
         "enabled": True,
         "difficulty": task.difficulty,
         "step_index": step_index,
         "max_steps": max_steps,
+        "remaining_model_calls": max_steps - step_index + 1,
+        "answer_submission_urgent": answer_urgent,
+        "link_question_to_data_required": require_linking_helper,
         "model_input_position": "front_after_system_before_task_prompt",
         "current_focus": current_focus,
         "observed_nodes": observed_nodes,
@@ -1091,6 +1258,32 @@ class ReActAgent:
                 "Do not repeat Thought-only text or <think> tags. Return exactly one valid step: "
                 "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
             )
+        if _should_require_link_question_to_data(task, state):
+            instructions.append(
+                "Grounded-link requirement: in your next Python code block, call "
+                "`link_question_to_data(max_candidates=5)` before broad markdown search or repeated manual matching. "
+                "Use its `row_ids`, `usable_filter`, `value_matches`, and `join_candidates` to connect question "
+                "mentions or markdown records to actual structured data. You may continue solving in the same script."
+            )
+        if _should_prioritize_answer_submission(
+            state,
+            fallback_answer,
+            step_index=step_index,
+            max_steps=self.config.max_steps,
+        ):
+            if fallback_answer is not None:
+                preview = _safe_json_dumps(_answer_preview(fallback_answer, max_rows=2))
+                instructions.append(
+                    "Final submission priority: a valid fallback answer candidate is already available. "
+                    f"Submit `Answer:` now using exactly this table shape: {preview}. "
+                    "Do not run more code unless you can name a missing requested value."
+                )
+            else:
+                instructions.append(
+                    "Final submission priority: there are very few model calls left. If the latest observation "
+                    "contains the requested rows, count, percentage, or value, return `Answer:` now with exactly "
+                    "the requested columns. Run more Python only if a required requested value is still missing."
+                )
         if not instructions:
             return None
         return "\n\n".join(instructions)

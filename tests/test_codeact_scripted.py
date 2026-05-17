@@ -269,11 +269,12 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
         assert planning_instruction is not None
         assert planning_snapshot is not None
         assert planning_snapshot["mode"] == "medium_light"
-        assert len(planning_snapshot["nodes"]) == 2
+        assert len(planning_snapshot["nodes"]) == 3
         assert messages[0].role == "system"
         assert messages[1].content.startswith("PLANNING PREFIX")
         assert "schema_linking" in messages[1].content
         assert "target_columns" in messages[1].content
+        assert "answer_submission" in messages[1].content
         assert "semantic_mapping" not in messages[1].content
         assert "load_preprocess" not in messages[1].content
         assert "join_filter" not in messages[1].content
@@ -322,6 +323,7 @@ def test_hard_planning_prefix_is_front_of_model_input() -> None:
         assert messages[1].content.startswith("PLANNING PREFIX")
         assert "schema_linking" in messages[1].content
         assert "target_columns" in messages[1].content
+        assert "answer_submission" in messages[1].content
         assert "Progress: model call 1/16" in messages[1].content
         assert "completed=" not in messages[1].content
         assert "done" not in messages[1].content
@@ -370,6 +372,80 @@ def test_planning_snapshot_is_checkpointed_for_partial_trace() -> None:
         assert planning["model_input_position"] == "front_after_system_before_task_prompt"
         assert "observed_nodes" in planning
         assert "PLANNING PREFIX" in str(planning["prompt_prefix"])
+
+
+def test_late_planning_prioritizes_answer_submission() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hard",
+                difficulty="hard",
+                question="What percentage of rows match the condition?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        state.steps.append(
+            StepRecord(
+                step_index=14,
+                thought="Computed the requested percentage.",
+                action="execute_python",
+                action_input={"code": "print('Percentage: 100.00%')"},
+                raw_response="Thought: compute\nCode:\n```python\nprint('Percentage: 100.00%')\n```",
+                observation={
+                    "ok": True,
+                    "tool": "execute_python",
+                    "content": {"output": "Percentage: 100.00%", "stderr": ""},
+                },
+                ok=True,
+            )
+        )
+
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=15,
+            max_steps=16,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        assert planning_snapshot["current_focus"] == "answer_submission"
+        assert planning_snapshot["answer_submission_urgent"] is True
+        assert "FINAL-STEPS SUBMISSION RULE" in planning_instruction
+
+
+def test_hard_markdown_entity_task_requires_grounded_linking() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "knowledge.md").write_text(
+            "The Yearly Kickoff record links prose IDs to budget rows.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hard",
+                difficulty="hard",
+                question='Compare "Yearly Kickoff" with "October Meeting".',
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=1,
+            max_steps=16,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        assert planning_snapshot["link_question_to_data_required"] is True
+        assert "GROUNDED-LINK REQUIREMENT" in planning_instruction
 
 
 def test_hard_rule_task_gets_conservative_knowledge_reminder() -> None:
