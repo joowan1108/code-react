@@ -334,6 +334,52 @@ def test_sanitize_answer_keeps_explicitly_requested_columns() -> None:
         assert answer.rows == [["163109", "F", "SLE"]]
 
 
+def test_sanitize_answer_keeps_name_and_requested_metric_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_views",
+                difficulty="medium",
+                question="Identify the total views on the post 'Computer Game Datasets'. Name the user who posted it last time.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["total_views", "last_user_name"],
+                rows=[[1708.0, "mbq"]],
+            ),
+        )
+
+        assert answer.columns == ["total_views", "last_user_name"]
+        assert answer.rows == [[1708.0, "mbq"]]
+
+
+def test_sanitize_answer_keeps_name_when_question_says_include_cost() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_cost",
+                difficulty="hard",
+                question="Write the full name of the member who spent money for water, veggie tray and supplies and include the cost of it.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["member_name", "cost"],
+                rows=[["Elijah Allen", 28.15]],
+            ),
+        )
+
+        assert answer.columns == ["member_name", "cost"]
+        assert answer.rows == [["Elijah Allen", 28.15]]
+
+
 def test_medium_planning_prefix_is_front_of_model_input() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)

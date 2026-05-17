@@ -481,15 +481,49 @@ def _single_target_column_indexes(task: PublicTask, answer: AnswerTable) -> list
     question = task.question.casefold()
     question_tokens = _split_identifier_tokens(task.question)
     column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
+    metric_tokens = {
+        "amount",
+        "budget",
+        "consumption",
+        "cost",
+        "count",
+        "date",
+        "expense",
+        "price",
+        "score",
+        "time",
+        "total",
+        "value",
+        "view",
+        "viewcount",
+        "views",
+    }
+    multi_output_cues = (
+        " and include ",
+        " include ",
+        " with their ",
+        " with its ",
+        " give their ",
+        " along with ",
+    )
+    has_explicit_metric_request = bool(question_tokens & metric_tokens)
+    has_metric_column = any(tokens & metric_tokens for tokens in column_tokens)
+    has_multi_output_cue = any(cue in question for cue in multi_output_cues)
 
     target_groups: list[set[str]] = []
     if re.search(r"\bwhat(?:'s| is) the comment\b|\bcomment with\b", question):
         target_groups.append({"comment", "text", "body", "content"})
     elif re.search(r"\b(names?|name) of\b|\bname the\b|\bwhat are the names\b", question):
+        if has_multi_output_cue or (has_explicit_metric_request and has_metric_column):
+            return None
         target_groups.append({"name"})
     elif re.search(r"\bwhich event\b|\bwhat event\b", question):
+        if has_multi_output_cue:
+            return None
         target_groups.append({"event", "name", "title"})
     elif re.search(r"\bwhich race\b|\bwhat race\b", question):
+        if has_multi_output_cue:
+            return None
         target_groups.append({"race", "name", "title"})
     elif re.search(r"\bstate the date\b|\bwhat date\b|\bwhich date\b", question):
         target_groups.append({"date"})
