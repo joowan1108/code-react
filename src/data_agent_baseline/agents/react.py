@@ -429,9 +429,134 @@ def _normalize_answer_table(answer: AnswerTable) -> AnswerTable:
     )
 
 
+def _project_answer_columns(answer: AnswerTable, keep_indexes: list[int]) -> AnswerTable:
+    return AnswerTable(
+        columns=[answer.columns[index] for index in keep_indexes],
+        rows=[[row[index] for index in keep_indexes] for row in answer.rows],
+    )
+
+
+def _matching_column_indexes(answer: AnswerTable, token_groups: list[set[str]]) -> list[int] | None:
+    if not token_groups:
+        return None
+
+    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
+    keep: list[int] = []
+    for group in token_groups:
+        matches = [index for index, tokens in enumerate(column_tokens) if tokens & group]
+        if not matches:
+            return None
+        keep.extend(matches)
+
+    deduped = sorted(set(keep))
+    if not deduped or len(deduped) >= len(answer.columns):
+        return None
+    return deduped
+
+
+def _explicit_requested_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
+    question = task.question.casefold()
+    groups: list[set[str]] = []
+
+    if re.search(r"\bids?\b|identifier", question):
+        groups.append({"id"})
+    if re.search(r"\bsex\b|\bgender\b", question):
+        groups.append({"sex", "gender"})
+    if re.search(r"\bdisease\b|diagnos", question):
+        groups.append({"disease", "diagnosis"})
+    if "type of expense" in question or "expense type" in question:
+        groups.append({"type", "category"})
+    if "total value" in question or "total cost" in question or "total amount" in question:
+        groups.append({"total", "value", "cost", "amount", "sum"})
+
+    if len(groups) < 2:
+        return None
+    return _matching_column_indexes(answer, groups)
+
+
+def _single_target_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
+    if len(answer.columns) <= 1 or _question_is_single_value(task.question):
+        return None
+
+    question = task.question.casefold()
+    question_tokens = _split_identifier_tokens(task.question)
+    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
+
+    target_groups: list[set[str]] = []
+    if re.search(r"\bwhat(?:'s| is) the comment\b|\bcomment with\b", question):
+        target_groups.append({"comment", "text", "body", "content"})
+    elif re.search(r"\b(names?|name) of\b|\bname the\b|\bwhat are the names\b", question):
+        target_groups.append({"name"})
+    elif re.search(r"\bwhich event\b|\bwhat event\b", question):
+        target_groups.append({"event", "name", "title"})
+    elif re.search(r"\bwhich race\b|\bwhat race\b", question):
+        target_groups.append({"race", "name", "title"})
+    elif re.search(r"\bstate the date\b|\bwhat date\b|\bwhich date\b", question):
+        target_groups.append({"date"})
+    elif "finish time" in question:
+        target_groups.append({"time"})
+    elif re.search(r"\bnumber of the driver\b|\bdriver number\b", question):
+        target_groups.append({"number"})
+    elif re.search(r"\bcountries\b|\bcountry\b", question):
+        target_groups.append({"country"})
+    else:
+        return None
+
+    if target_groups[0] == {"name"}:
+        name_indexes = [
+            index for index, tokens in enumerate(column_tokens) if tokens & target_groups[0]
+        ]
+        if not name_indexes:
+            return None
+        subject_matches = [
+            index
+            for index in name_indexes
+            if column_tokens[index] & (question_tokens - {"name", "names"})
+        ]
+        if subject_matches:
+            name_indexes = subject_matches
+        non_full_name = [index for index in name_indexes if "full" not in column_tokens[index]]
+        if non_full_name:
+            name_indexes = non_full_name
+        keep = sorted(set(name_indexes))
+    else:
+        keep = _matching_column_indexes(answer, target_groups)
+        if keep is None:
+            return None
+
+    if len(keep) >= len(answer.columns):
+        return None
+    return keep
+
+
+def _remove_high_confidence_extra_columns(task: PublicTask, answer: AnswerTable) -> AnswerTable:
+    explicit_indexes = _explicit_requested_column_indexes(task, answer)
+    if explicit_indexes is not None:
+        return _project_answer_columns(answer, explicit_indexes)
+
+    single_target_indexes = _single_target_column_indexes(task, answer)
+    if single_target_indexes is not None:
+        return _project_answer_columns(answer, single_target_indexes)
+
+    return answer
+
+
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
-    _ = task
-    return _normalize_answer_table(answer)
+    normalized = _normalize_answer_table(answer)
+    return _remove_high_confidence_extra_columns(task, normalized)
+
+
+def _answer_projection_preview(task: PublicTask, answer: AnswerTable) -> dict[str, object] | None:
+    normalized = _normalize_answer_table(answer)
+    projected = _remove_high_confidence_extra_columns(task, normalized)
+    if projected.columns == normalized.columns:
+        return None
+    return {
+        "original_columns": list(normalized.columns),
+        "projected_columns": list(projected.columns),
+        "reason": "high-confidence final-column projection",
+    }
+
 
 
 def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None:

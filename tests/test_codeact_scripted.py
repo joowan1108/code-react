@@ -16,6 +16,7 @@ from data_agent_baseline.agents.react import (
     _final_answer_check,
     _python_repair_hints,
     _render_observation_for_prompt,
+    _sanitize_answer_table,
     parse_model_step,
 )
 from data_agent_baseline.agents.runtime import AgentRuntimeState, StepRecord
@@ -239,6 +240,98 @@ def test_final_answer_check_warns_about_likely_extra_columns() -> None:
         assert check["question_type"] == "row_list"
         assert check["warnings"]
         assert "debug_score" in check["warnings"][0]
+
+
+def test_sanitize_answer_projects_obvious_single_target_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_event",
+                difficulty="easy",
+                question="Which event has the lowest cost?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["event_name", "cost"],
+                rows=[["November Speaker", 6.0], ["October Speaker", 6.0]],
+            ),
+        )
+
+        assert answer.columns == ["event_name"]
+        assert answer.rows == [["November Speaker"], ["October Speaker"]]
+
+
+def test_sanitize_answer_projects_comment_text_column() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_comment",
+                difficulty="medium",
+                question="Among the posts with views ranging from 100 to 150, what is the comment with the highest score?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["Id", "PostId", "Score", "Text"],
+                rows=[[90813, 46764, 14, "Welcome to Cross Validated."]],
+            ),
+        )
+
+        assert answer.columns == ["Text"]
+        assert answer.rows == [["Welcome to Cross Validated."]]
+
+
+def test_sanitize_answer_prefers_specific_name_over_full_name() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_names",
+                difficulty="medium",
+                question="What are the names of the superheroes with the power of death touch?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["superhero_name", "full_name"],
+                rows=[["Black Flash", "-"], ["Blackwulf", "Lucian"]],
+            ),
+        )
+
+        assert answer.columns == ["superhero_name"]
+        assert answer.rows == [["Black Flash"], ["Blackwulf"]]
+
+
+def test_sanitize_answer_keeps_explicitly_requested_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_multi",
+                difficulty="easy",
+                question="For patients with severe degree of thrombosis, list their ID, sex and disease the patient is diagnosed with.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["ID", "SEX", "Diagnosis"],
+                rows=[["163109", "F", "SLE"]],
+            ),
+        )
+
+        assert answer.columns == ["ID", "SEX", "Diagnosis"]
+        assert answer.rows == [["163109", "F", "SLE"]]
 
 
 def test_medium_planning_prefix_is_front_of_model_input() -> None:
