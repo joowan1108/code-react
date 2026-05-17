@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import tempfile
 import traceback
+import types
 from pathlib import Path
 from typing import Any
 
@@ -267,6 +268,7 @@ def extract_markdown_records(
     terms: object = None,
     *,
     question: str = "",
+    path_filters: object = None,
     max_records: int = 12,
     max_chars: int = 900,
     include_linked_ids: bool = True,
@@ -286,6 +288,22 @@ def extract_markdown_records(
         paths = sorted(root.rglob("*.md"))
     except Exception:  # noqa: BLE001
         return []
+    markdown_path_filters = _normalize_search_terms(path_filters) if path_filters is not None else []
+    if markdown_path_filters:
+        lowered_filters = [path_filter.casefold().replace("\\", "/") for path_filter in markdown_path_filters]
+
+        def path_matches_filter(path: Path) -> bool:
+            relative = _relative_path(path, root).casefold()
+            name = path.name.casefold()
+            return any(
+                relative == lowered_filter
+                or relative.endswith("/" + lowered_filter)
+                or name == lowered_filter
+                or lowered_filter in relative
+                for lowered_filter in lowered_filters
+            )
+
+        paths = [path for path in paths if path_matches_filter(path)]
 
     all_blocks: list[tuple[Path, int, str | None, str]] = []
     for path in paths:
@@ -402,6 +420,59 @@ def extract_markdown_records(
     return results
 
 
+def _looks_like_markdown_paths(value: object) -> bool:
+    terms = _normalize_search_terms(value)
+    return bool(terms) and all(
+        term.casefold().endswith(".md") or "/" in term or "\\" in term
+        for term in terms
+    )
+
+
+def _terms_from_pattern(pattern: object) -> list[str]:
+    if pattern is None:
+        return []
+    raw = str(pattern)
+    terms: list[str] = []
+    for piece in raw.split("|"):
+        cleaned = re.sub(r"[^A-Za-z0-9_ -]+", " ", piece).strip()
+        if cleaned:
+            terms.append(cleaned)
+        terms.extend(token for token in re.findall(r"[A-Za-z0-9_ -]{3,}", cleaned) if token != cleaned)
+    return _normalize_search_terms(terms)
+
+
+def _python_helper_modules(functions: dict[str, Any]) -> dict[str, types.ModuleType | None]:
+    previous_modules: dict[str, types.ModuleType | None] = {}
+    module_specs = {
+        "retrieve_knowledge": {"retrieve_knowledge": functions["retrieve_knowledge"]},
+        "search_markdown": {"search_markdown": functions["search_markdown"]},
+        "extract_markdown_records": {
+            "extract_markdown_records": functions["extract_markdown_records"],
+        },
+        "tools": {
+            "retrieve_knowledge": functions["retrieve_knowledge"],
+            "search_markdown": functions["search_markdown"],
+            "extract_markdown_records": functions["extract_markdown_records"],
+        },
+    }
+    for module_name, attributes in module_specs.items():
+        existing = sys.modules.get(module_name)
+        previous_modules[module_name] = existing if isinstance(existing, types.ModuleType) else None
+        module = types.ModuleType(module_name)
+        for attribute_name, attribute_value in attributes.items():
+            setattr(module, attribute_name, attribute_value)
+        sys.modules[module_name] = module
+    return previous_modules
+
+
+def _restore_python_helper_modules(previous_modules: dict[str, types.ModuleType | None]) -> None:
+    for module_name, previous_module in previous_modules.items():
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module
+
+
 def _run_python_code(
     context_root: str,
     working_dir: str,
@@ -413,6 +484,72 @@ def _run_python_code(
 ) -> None:
     resolved_context_root = Path(context_root).resolve()
     resolved_working_dir = Path(working_dir).resolve()
+
+    def retrieve_knowledge_helper(**kwargs: Any) -> list[dict[str, object]]:
+        return retrieve_knowledge_snippets(
+            resolved_context_root,
+            question,
+            **kwargs,
+        )
+
+    def search_markdown_helper(terms: object = None, **kwargs: Any) -> list[dict[str, object]]:
+        if terms is None:
+            terms = kwargs.pop("terms", None) or kwargs.pop("query", None) or question
+        if "top_k" in kwargs and "max_matches" not in kwargs:
+            kwargs["max_matches"] = kwargs.pop("top_k")
+        if "max_chars" in kwargs and "context_chars" not in kwargs:
+            kwargs["context_chars"] = kwargs.pop("max_chars")
+        allowed_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in {"max_matches", "context_chars"}
+        }
+        return search_markdown_documents(
+            resolved_context_root,
+            terms,
+            **allowed_kwargs,
+        )
+
+    def extract_markdown_records_helper(*args: object, **kwargs: Any) -> list[dict[str, object]]:
+        first_arg = args[0] if args else kwargs.pop("terms", None)
+        second_arg = args[1] if len(args) > 1 else None
+        path_filters = kwargs.pop("path_filters", None) or kwargs.pop("paths", None) or kwargs.pop("files", None)
+        terms = first_arg
+
+        if first_arg is not None and _looks_like_markdown_paths(first_arg):
+            path_filters = first_arg
+            terms = second_arg
+        elif second_arg is not None:
+            terms = second_arg
+
+        pattern_terms = _terms_from_pattern(kwargs.pop("pattern", None))
+        fields = kwargs.pop("fields", None)
+        query = str(kwargs.pop("query", question) or question)
+        max_records = int(kwargs.pop("max_records", kwargs.pop("max_matches", 12)) or 12)
+        max_chars = int(kwargs.pop("max_chars", kwargs.pop("context_chars", 900)) or 900)
+        include_linked_ids = bool(kwargs.pop("include_linked_ids", True))
+        link_depth = int(kwargs.pop("link_depth", 2) or 0)
+        kwargs.pop("include_context", None)
+
+        term_list: list[str] = []
+        if terms is not None:
+            term_list.extend(_normalize_search_terms(terms))
+        if fields is not None:
+            term_list.extend(_normalize_search_terms(fields))
+        term_list.extend(pattern_terms)
+        normalized_terms: object = _normalize_search_terms(term_list) if term_list else None
+
+        return extract_markdown_records(
+            resolved_context_root,
+            normalized_terms,
+            question=query,
+            path_filters=path_filters,
+            max_records=max_records,
+            max_chars=max_chars,
+            include_linked_ids=include_linked_ids,
+            link_depth=link_depth,
+        )
+
     namespace: dict[str, Any] = {
         "__builtins__": __builtins__,
         "__name__": "__main__",
@@ -431,29 +568,24 @@ def _run_python_code(
         "work_dir": str(resolved_working_dir),
         "WORK_DIR": str(resolved_working_dir),
         "Path": Path,
-        "retrieve_knowledge": lambda **kwargs: retrieve_knowledge_snippets(
-            resolved_context_root,
-            question,
-            **kwargs,
-        ),
-        "search_markdown": lambda terms, **kwargs: search_markdown_documents(
-            resolved_context_root,
-            terms,
-            **kwargs,
-        ),
-        "extract_markdown_records": lambda terms=None, **kwargs: extract_markdown_records(
-            resolved_context_root,
-            terms,
-            question=question,
-            **kwargs,
-        ),
+        "retrieve_knowledge": retrieve_knowledge_helper,
+        "search_markdown": search_markdown_helper,
+        "extract_markdown_records": extract_markdown_records_helper,
     }
     resolved_stdout_path = Path(stdout_path)
     resolved_stderr_path = Path(stderr_path)
+    previous_helper_modules: dict[str, types.ModuleType | None] | None = None
 
     try:
         resolved_working_dir.mkdir(parents=True, exist_ok=True)
         os.chdir(resolved_working_dir)
+        previous_helper_modules = _python_helper_modules(
+            {
+                "retrieve_knowledge": retrieve_knowledge_helper,
+                "search_markdown": search_markdown_helper,
+                "extract_markdown_records": extract_markdown_records_helper,
+            }
+        )
         with _capture_process_streams(resolved_stdout_path, resolved_stderr_path):
             exec(code, namespace, namespace)
         queue.put({"success": True})
@@ -465,6 +597,9 @@ def _run_python_code(
                 "traceback": traceback.format_exc(),
             }
         )
+    finally:
+        if previous_helper_modules is not None:
+            _restore_python_helper_modules(previous_helper_modules)
 
 
 def execute_python_code(

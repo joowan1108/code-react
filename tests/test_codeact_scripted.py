@@ -697,6 +697,48 @@ def test_python_namespace_exposes_markdown_record_graph() -> None:
         assert "$100" in result["output"]
 
 
+def test_python_markdown_helpers_support_model_style_imports() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "doc").mkdir()
+        (context_path / "doc" / "races.md").write_text(
+            "raceId: 18\n"
+            "year: 2008\n"
+            "name: Australian Grand Prix\n"
+            "circuitId: 1\n\n"
+            "raceId: 19\n"
+            "year: 2008\n"
+            "name: Malaysian Grand Prix\n",
+            encoding="utf-8",
+        )
+        (context_path / "knowledge.md").write_text(
+            "Race records in markdown use raceId and name fields.",
+            encoding="utf-8",
+        )
+
+        result = execute_python_code(
+            context_path,
+            (
+                "import json\n"
+                "from extract_markdown_records import extract_markdown_records\n"
+                "from tools import retrieve_knowledge, search_markdown\n"
+                "records = extract_markdown_records(['races.md'], "
+                "pattern='raceId|year|Australian.*Grand Prix', "
+                "fields=['name', 'circuitId'], include_context=True)\n"
+                "print(json.dumps(records, ensure_ascii=False))\n"
+                "print(retrieve_knowledge(top_k=1)[0]['path'])\n"
+                "print(search_markdown(['raceId'], max_matches=1)[0]['path'])\n"
+            ),
+            timeout_seconds=10,
+            question="Find the raceId for the 2008 Australian Grand Prix.",
+        )
+
+        assert result["success"]
+        assert "Australian Grand Prix" in result["output"]
+        assert "raceId" in result["output"]
+        assert "doc/races.md" in result["output"]
+
+
 def test_codeact_scripted_task_11() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         config = AppConfig(
