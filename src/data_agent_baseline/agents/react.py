@@ -92,6 +92,21 @@ PLANNING_NODES = (
     ),
 )
 
+MEDIUM_PLANNING_NODES = (
+    (
+        "schema_linking",
+        (),
+        "Confirm the actual files/tables and available columns only as much as needed; "
+        "do not assume concepts that are not backed by a real data source.",
+    ),
+    (
+        "target_columns",
+        ("schema_linking",),
+        "Decide the exact requested final answer columns and exclude helper, filter, "
+        "sort, join, or explanation columns.",
+    ),
+)
+
 
 def _strip_json_fence(raw_response: str) -> str:
     text = raw_response.strip()
@@ -713,13 +728,14 @@ def _planning_observed_nodes(
 def _planning_status(
     state: AgentRuntimeState,
     fallback_answer: AnswerTable | None,
+    nodes: tuple[tuple[str, tuple[str, ...], str], ...] = PLANNING_NODES,
 ) -> tuple[list[dict[str, object]], str, list[str]]:
     observed = _planning_observed_nodes(state, fallback_answer)
     node_status: dict[str, str] = {}
     node_records: list[dict[str, object]] = []
     active_node: str | None = None
 
-    for node_id, dependencies, instruction in PLANNING_NODES:
+    for node_id, dependencies, instruction in nodes:
         if node_id in observed:
             status = "observed"
         elif all(node_status.get(dependency) == "observed" for dependency in dependencies):
@@ -753,6 +769,47 @@ def _build_planning_context(
 ) -> tuple[str | None, dict[str, object] | None]:
     if not _task_uses_planning(task):
         return None, None
+
+    difficulty = task.difficulty.casefold()
+    if difficulty == "medium":
+        node_records, current_focus, observed_nodes = _planning_status(
+            state,
+            fallback_answer,
+            MEDIUM_PLANNING_NODES,
+        )
+        lines = [
+            "PLANNING PREFIX - medium task light schema/final-column checklist.",
+            "This compact checklist is inserted at the front of every model input for this task.",
+            "Do not spend a step restating the checklist; inspect schema/columns only if not already clear, then solve directly.",
+            f"Progress: model call {step_index}/{max_steps}; current_focus={current_focus}; "
+            f"observed_signals={observed_nodes or ['none']}.",
+            "Light checklist:",
+        ]
+        for node in node_records:
+            dependencies = ", ".join(str(dep) for dep in node["dependent_task_ids"]) or "-"
+            lines.append(
+                f"- {node['id']} deps=[{dependencies}] status={node['status']}: "
+                f"{node['instruction']}"
+            )
+        lines.append(
+            "Priority: verify real tables/columns for requested concepts, decide the exact final "
+            "answer columns, then compute and submit with no helper columns. Do not follow the "
+            "full multi-stage planning graph for medium tasks."
+        )
+        prompt_prefix = "\n".join(lines)
+        snapshot = {
+            "enabled": True,
+            "mode": "medium_light",
+            "difficulty": task.difficulty,
+            "step_index": step_index,
+            "max_steps": max_steps,
+            "model_input_position": "front_after_system_before_task_prompt",
+            "current_focus": current_focus,
+            "observed_nodes": observed_nodes,
+            "nodes": node_records,
+            "prompt_prefix": prompt_prefix,
+        }
+        return prompt_prefix, snapshot
 
     node_records, current_focus, observed_nodes = _planning_status(state, fallback_answer)
     lines = [

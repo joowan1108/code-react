@@ -220,10 +220,16 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
 
         assert planning_instruction is not None
         assert planning_snapshot is not None
+        assert planning_snapshot["mode"] == "medium_light"
+        assert len(planning_snapshot["nodes"]) == 2
         assert messages[0].role == "system"
         assert messages[1].content.startswith("PLANNING PREFIX")
         assert "schema_linking" in messages[1].content
         assert "target_columns" in messages[1].content
+        assert "semantic_mapping" not in messages[1].content
+        assert "load_preprocess" not in messages[1].content
+        assert "join_filter" not in messages[1].content
+        assert "aggregate_select" not in messages[1].content
         assert "Progress: model call 1/16" in messages[1].content
         assert "completed=" not in messages[1].content
         assert "done" not in messages[1].content
