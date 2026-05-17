@@ -9,7 +9,6 @@ from data_agent_baseline.agents.model import ModelAdapter, ModelMessage, ModelSt
 from data_agent_baseline.agents.prompt import (
     CODEACT_REACT_SYSTEM_PROMPT,
     REACT_SYSTEM_PROMPT,
-    build_observation_prompt,
     build_system_prompt,
     build_task_prompt,
 )
@@ -796,6 +795,62 @@ def _render_observation_for_prompt(
     return _render_compact_generic_observation(observation, config, len(rendered))
 
 
+def _render_step_response_for_log(step: StepRecord, config: ReActAgentConfig) -> str:
+    if step.action == "__error__":
+        return (
+            "Invalid previous response omitted by runtime. "
+            "Use the paired observation to correct the next step."
+        )
+    rendered_lines = _compact_text_block(
+        "assistant_response",
+        step.raw_response.strip(),
+        head_chars=config.observation_head_chars,
+        tail_chars=config.observation_tail_chars,
+        final_marker_chars=config.final_marker_chars,
+    )
+    return "\n".join(rendered_lines)
+
+
+def _render_recent_execution_log(
+    steps: list[StepRecord],
+    config: ReActAgentConfig,
+    *,
+    total_step_count: int,
+) -> str:
+    if not steps:
+        return ""
+
+    lines = [
+        "RECENT EXECUTION LOG",
+        (
+            f"Showing the most recent {len(steps)} of {total_step_count} completed steps. "
+            "Each block pairs the previous model response with the exact runtime observation "
+            "so code and result stay connected."
+        ),
+        (
+            "Use this log as memory: reuse confirmed schema/joins/values, avoid repeating failed "
+            "checks, and submit only when the requested final table is supported."
+        ),
+    ]
+    for step in steps:
+        lines.extend(
+            [
+                "",
+                f"--- Step {step.step_index} | action={step.action} | ok={step.ok} ---",
+                "Previous model response:",
+                _render_step_response_for_log(step, config),
+                "Paired runtime observation:",
+                _render_observation_for_prompt(step.observation, config),
+            ]
+        )
+    lines.append(
+        "\nExecution-log reminder: if a previous block already contains an exact "
+        "`FINAL_TABLE_JSON`, submit `Answer` with exactly those columns/rows. Otherwise, "
+        "continue from the unresolved issue shown by the latest observation."
+    )
+    return "\n".join(lines)
+
+
 def _task_uses_planning(task: PublicTask) -> bool:
     return task.difficulty.casefold() in PLANNING_DIFFICULTIES
 
@@ -1343,19 +1398,14 @@ class ReActAgent:
         history_steps = state.steps
         if self.config.prompt_history_steps > 0:
             history_steps = history_steps[-self.config.prompt_history_steps :]
-        for step in history_steps:
-            assistant_content = step.raw_response
-            if step.action == "__error__":
-                assistant_content = (
-                    "Invalid previous response omitted by runtime. "
-                    "Use the observation to correct the next step."
-                )
-            messages.append(ModelMessage(role="assistant", content=assistant_content))
+        if history_steps:
             messages.append(
                 ModelMessage(
                     role="user",
-                    content=build_observation_prompt(
-                        _render_observation_for_prompt(step.observation, self.config)
+                    content=_render_recent_execution_log(
+                        list(history_steps),
+                        self.config,
+                        total_step_count=len(state.steps),
                     ),
                 )
             )

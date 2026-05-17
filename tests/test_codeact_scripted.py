@@ -141,8 +141,16 @@ def test_prompt_history_uses_recent_steps_only() -> None:
         )
         messages = agent._build_messages(task, state)
         assistant_messages = [message.content for message in messages if message.role == "assistant"]
+        execution_logs = [
+            message.content for message in messages if message.content.startswith("RECENT EXECUTION LOG")
+        ]
         joined_messages = "\n".join(message.content for message in messages)
-        assert len(assistant_messages) == 5
+        assert len(assistant_messages) == 0
+        assert len(execution_logs) == 1
+        assert "Showing the most recent 5 of 6 completed steps" in execution_logs[0]
+        assert "--- Step 2 | action=execute_python | ok=True ---" in execution_logs[0]
+        assert "Previous model response:" in execution_logs[0]
+        assert "Paired runtime observation:" in execution_logs[0]
         assert "step 1" not in joined_messages
         assert "output 2" in joined_messages
         assert "step 3" in joined_messages
