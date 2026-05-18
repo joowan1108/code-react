@@ -1003,6 +1003,10 @@ def _task_uses_planning(task: PublicTask) -> bool:
     return task.difficulty.casefold() in PLANNING_DIFFICULTIES
 
 
+def _task_uses_advanced_planning(task: PublicTask) -> bool:
+    return task.difficulty.casefold() in {"hard", "extreme"}
+
+
 def _task_has_markdown(task: PublicTask) -> bool:
     try:
         if any(task.context_dir.glob("*.md")):
@@ -1500,8 +1504,9 @@ def _build_planning_context(
         return None, None
 
     difficulty = task.difficulty.casefold()
-    evidence_ledger = _task_evidence_ledger(task, state)
-    loop_guard = _loop_guard_summary(state)
+    use_advanced_planning = _task_uses_advanced_planning(task)
+    evidence_ledger = _task_evidence_ledger(task, state) if use_advanced_planning else []
+    loop_guard = _loop_guard_summary(state) if use_advanced_planning else {"triggered": False}
     answer_urgent = _should_prioritize_answer_submission(
         task,
         state,
@@ -1545,18 +1550,6 @@ def _build_planning_context(
                 f"- {node['id']} deps=[{dependencies}] status={node['status']}: "
                 f"{node['instruction']}"
             )
-        lines.append("Evidence checklist:")
-        for evidence in evidence_ledger:
-            lines.append(
-                f"- {evidence['id']} status={evidence['status']}: "
-                f"{evidence['instruction']}"
-            )
-        if loop_guard.get("triggered"):
-            lines.append(
-                "LOOP GUARD: the recent execution pattern repeated code, repeated output, "
-                "or repeated failed schema/search evidence. Do not repeat the same search; "
-                "change parser/source or make one final supported computation."
-            )
         lines.append(
             "Priority: verify real tables/columns for requested concepts, decide the exact final "
             "answer columns, then compute and submit with no helper columns. Do not follow the "
@@ -1586,8 +1579,6 @@ def _build_planning_context(
             "model_input_position": "front_after_system_before_task_prompt",
             "current_focus": current_focus,
             "observed_nodes": observed_nodes,
-            "evidence_ledger": evidence_ledger,
-            "loop_guard": loop_guard,
             "nodes": node_records,
             "prompt_prefix": prompt_prefix,
         }
@@ -1789,7 +1780,11 @@ class ReActAgent:
                 "Do not repeat Thought-only text or <think> tags. Return exactly one valid step: "
                 "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
             )
-        loop_guard = _loop_guard_summary(state)
+        loop_guard = (
+            _loop_guard_summary(state)
+            if _task_uses_advanced_planning(task)
+            else {"triggered": False}
+        )
         if loop_guard.get("triggered"):
             missing_evidence = [
                 str(item["id"])

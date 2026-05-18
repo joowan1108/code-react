@@ -494,6 +494,10 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
         assert "load_preprocess" not in messages[1].content
         assert "join_filter" not in messages[1].content
         assert "aggregate_select" not in messages[1].content
+        assert "Evidence checklist:" not in messages[1].content
+        assert "LOOP GUARD" not in messages[1].content
+        assert "evidence_ledger" not in planning_snapshot
+        assert "loop_guard" not in planning_snapshot
         assert "Progress: model call 1/16" in messages[1].content
         assert "completed=" not in messages[1].content
         assert "done" not in messages[1].content
@@ -866,6 +870,63 @@ def test_loop_guard_warns_after_repeated_python_execution() -> None:
         assert runtime_instruction is not None
         assert "Loop guard:" in runtime_instruction
         assert "Do not rerun the same" in runtime_instruction
+
+
+def test_medium_planning_does_not_use_advanced_loop_guard() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_medium_loop",
+                difficulty="medium",
+                question="What percentage of rows match the condition?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        for index in (1, 2):
+            state.steps.append(
+                StepRecord(
+                    step_index=index,
+                    thought="Inspect schema again.",
+                    action="execute_python",
+                    action_input={"code": "print('Tables: []')"},
+                    raw_response="Thought: inspect\nCode:\n```python\nprint('Tables: []')\n```",
+                    observation={
+                        "ok": True,
+                        "tool": "execute_python",
+                        "content": {"output": "Tables: []", "stderr": ""},
+                    },
+                    ok=True,
+                )
+            )
+        agent = ReActAgent(
+            model=ScriptedModelAdapter([]),
+            tools=ToolRegistry(specs={}, handlers={}),
+            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
+        )
+
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=3,
+            max_steps=16,
+        )
+        runtime_instruction = agent._build_runtime_instruction(
+            task=task,
+            step_index=3,
+            state=state,
+            fallback_answer=None,
+            consecutive_parse_errors=0,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        assert "loop_guard" not in planning_snapshot
+        assert "evidence_ledger" not in planning_snapshot
+        assert "LOOP GUARD" not in planning_instruction
+        assert runtime_instruction is None
 
 
 def test_knowledge_reminder_skips_quoted_value_lookup() -> None:
