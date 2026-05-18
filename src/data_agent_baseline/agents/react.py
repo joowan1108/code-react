@@ -678,7 +678,7 @@ def _python_repair_hints(content: dict[str, object], code: str) -> list[str]:
     ):
         add(
             "Helper functions are injected into Python. Call retrieve_knowledge(...), search_markdown(...), "
-            "extract_markdown_records(...), link_question_to_data(...), load_json_records(...), "
+            "extract_markdown_records(...), markdown_entity_table(...), link_question_to_data(...), load_json_records(...), "
             "or load_json_table(...) directly."
         )
     if "trying to merge on" in lowered and ("int64" in lowered or "object" in lowered or "str" in lowered):

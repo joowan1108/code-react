@@ -503,6 +503,414 @@ def extract_markdown_records(
     return results
 
 
+PATIENT_ID_PATTERNS = (
+    re.compile(r"\bpatient\s+(\d{2,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bMedical Record Number\s+(\d{2,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bfile(?:\s+number)?\s+(\d{2,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bfile\s+for\s+patient\s+(\d{2,})\b", flags=re.IGNORECASE),
+)
+ENTITY_ID_PATTERNS = (
+    re.compile(r"\bregistered under (?:the )?(?:unique )?identifier\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bregistered under (?:the )?(?:unique )?ID\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bregistration number\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bregistry number\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bRegistry Ref:\s*(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\breference(?:\s+code|\s+ID)?\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\breference number\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bregistered with identifier\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\btracked (?:with|under) identifier\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\btracked under reference ID\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bcatalog(?:ed|ued) (?:with|under) (?:registry number|reference code|reference number|identifier)\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bfiled under ID\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bunder ID\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bstrategic unit ID\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\blegality (?:entry|ruling) ID\s+(\d{1,})\b", flags=re.IGNORECASE),
+    re.compile(r"\bID\s+(\d{1,})\b", flags=re.IGNORECASE),
+)
+
+
+def _numeric_value(value: object) -> float | None:
+    text = str(value).replace(",", "").replace("$", "").replace("%", "").strip()
+    if text.casefold() in {"nan", "none", "null", ""}:
+        return math.nan
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _coerce_number(value: object) -> object:
+    number = _numeric_value(value)
+    if number is None:
+        return value
+    if isinstance(number, float) and math.isnan(number):
+        return None
+    if float(number).is_integer():
+        return int(number)
+    return number
+
+
+def _split_markdown_sentences(text: str) -> list[str]:
+    pieces = re.split(r"(?<=[.!?])\s+", text.replace("\r", " ").replace("\n", " "))
+    return [piece.strip() for piece in pieces if piece.strip()]
+
+
+def _best_number_near_terms(
+    text: str,
+    term_patterns: tuple[str, ...],
+    *,
+    unit_terms: tuple[str, ...] = (),
+) -> object | None:
+    best: tuple[float, int, object] | None = None
+    for sentence_index, sentence in enumerate(_split_markdown_sentences(text)):
+        lowered = sentence.casefold()
+        term_spans: list[tuple[int, int]] = []
+        for pattern in term_patterns:
+            term_spans.extend((match.start(), match.end()) for match in re.finditer(pattern, lowered))
+        if not term_spans:
+            continue
+
+        for match in MARKDOWN_NUMBER_PATTERN.finditer(sentence):
+            raw_value = match.group(0)
+            value = _coerce_number(raw_value)
+            if value is None:
+                continue
+            near_window = sentence[max(0, match.start() - 80) : match.end() + 80].casefold()
+            if unit_terms and not any(unit in near_window for unit in unit_terms):
+                continue
+            nearest_term = min(
+                term_spans,
+                key=lambda span: min(abs(match.start() - span[0]), abs(match.end() - span[1])),
+            )
+            distance = min(abs(match.start() - nearest_term[0]), abs(match.end() - nearest_term[1]))
+            score = -float(distance)
+            if nearest_term[1] <= match.start():
+                score += 20.0
+            elif match.end() < nearest_term[0]:
+                score -= 180.0
+            immediate_before = sentence[max(0, match.start() - 45) : match.start()].casefold()
+            immediate_after = sentence[match.end() : match.end() + 45].casefold()
+            if re.search(r"\b(?:verified|confirmed|corrected|adjusted|amended|rectified|finalized|final|accurate|precise)\s+(?:at|to|as|value of|figure of)?\s*$", immediate_before):
+                score += 120.0
+            if re.search(r"\b(?:initial|initially|preliminary|first|originally|estimated|thought|misread|mistaken|error)\b", immediate_before):
+                score -= 120.0
+            if re.search(r"^\s*(?:was|were)?\s*(?:later|subsequently)?\s*(?:corrected|adjusted|confirmed|verified|amended|rectified)", immediate_after):
+                score += 60.0
+            if re.search(r"\b(?:corrected|confirmed|verified|final|finalized|accurate|precise|rectified|updated|amended|current)\b", near_window):
+                score += 80.0
+            if re.search(r"\b(?:initial|initially|preliminary|estimated|misread|mistakenly|error|incorrect)\b", near_window):
+                score -= 25.0
+            if re.search(r"\b(?:not available|unavailable|nan|none|null|missing)\b", near_window):
+                score += 5.0
+            tie_breaker = (sentence_index * 1000) + match.start()
+            if best is None or (score, tie_breaker) > (best[0], best[1]):
+                best = (score, tie_breaker, value)
+    return None if best is None else best[2]
+
+
+def _best_year_near_terms(text: str, term_patterns: tuple[str, ...]) -> int | None:
+    best: tuple[float, int, int] | None = None
+    for sentence_index, sentence in enumerate(_split_markdown_sentences(text)):
+        lowered = sentence.casefold()
+        term_spans: list[tuple[int, int]] = []
+        for pattern in term_patterns:
+            term_spans.extend((match.start(), match.end()) for match in re.finditer(pattern, lowered))
+        if not term_spans:
+            continue
+        for match in re.finditer(r"\b(18\d{2}|19\d{2}|20\d{2})\b", sentence):
+            year = int(match.group(1))
+            distance = min(
+                min(abs(match.start() - term_start), abs(match.end() - term_end))
+                for term_start, term_end in term_spans
+            )
+            score = -float(distance)
+            near_window = sentence[max(0, match.start() - 90) : match.end() + 90].casefold()
+            if re.search(r"\b(?:corrected|confirmed|verified|official|correct|rectified|amended)\b", near_window):
+                score += 40.0
+            if re.search(r"\b(?:initial|preliminary|mistakenly|error|suggested)\b", near_window):
+                score -= 20.0
+            tie_breaker = (sentence_index * 1000) + match.start()
+            if best is None or (score, tie_breaker) > (best[0], best[1]):
+                best = (score, tie_breaker, year)
+    return None if best is None else best[2]
+
+
+def _first_regex_group(patterns: tuple[re.Pattern[str], ...], text: str) -> str | None:
+    for pattern in patterns:
+        match = pattern.search(text)
+        if match is not None:
+            return match.group(1).strip()
+    return None
+
+
+def _clean_markdown_entity_name(value: str) -> str:
+    cleaned = value.strip(" .,'\"")
+    cleaned = re.sub(r"\s+(?:is|was|whose|who|registered|tracked|cataloged|catalogued)\b.*", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" .,'\"")
+
+
+def _extract_markdown_names(text: str) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    name_patterns = (
+        r"\b(?:known as|designated|called)\s+([A-Z][A-Za-z0-9'(). -]{1,60})",
+        r"\b(?:codename|alias)\s+(?:is\s+|as\s+)?([A-Z][A-Za-z0-9'(). -]{1,60})",
+        r"\b(?:asset|operative|unit|entity|individual|subject)\s+(?:known as|designated|called)\s+([A-Z][A-Za-z0-9'(). -]{1,60})",
+    )
+    for pattern in name_patterns:
+        match = re.search(pattern, text)
+        if match is not None:
+            name = _clean_markdown_entity_name(match.group(1))
+            if name and len(name) <= 80:
+                fields["name"] = name
+                break
+
+    full_name_patterns = (
+        r"\bfull legal name (?:of|to be|is|as)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
+        r"\b(?:full name|complete legal name).{0,90}?\b(?:recorded as|documented as|confirmed as|listed as|updated.{0,30}?to(?: reflect)?|to be|is)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
+        r"\b(?:full name|civilian identity).{0,90}?\b(?:marked as|logged as|listed as)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
+    )
+    for sentence in _split_markdown_sentences(text):
+        if not re.search(r"\b(?:full name|complete legal name|civilian identity)\b", sentence, flags=re.IGNORECASE):
+            continue
+        for pattern in full_name_patterns:
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match is not None:
+                fields["full_name"] = _clean_markdown_entity_name(match.group(1))
+                return fields
+    return fields
+
+
+def _extract_markdown_block_fields(text: str) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    patient_id = _first_regex_group(PATIENT_ID_PATTERNS, text)
+    cards_id = re.search(r"\bcards_id\s+(\d{1,})\b", text, flags=re.IGNORECASE)
+    record_ids = []
+    seen_record_ids: set[str] = set()
+    for match in RECORD_ID_PATTERN.finditer(text):
+        value = match.group(0)
+        if value.casefold() not in seen_record_ids:
+            seen_record_ids.add(value.casefold())
+            record_ids.append(value)
+
+    if patient_id is not None:
+        fields["patient_id"] = int(patient_id)
+    else:
+        entity_id = _first_regex_group(ENTITY_ID_PATTERNS, text)
+        if entity_id is not None:
+            fields["id"] = int(entity_id)
+    if cards_id is not None:
+        fields["cards_id"] = int(cards_id.group(1))
+    if record_ids:
+        fields["record_ids"] = record_ids[:8]
+
+    fields.update(_extract_markdown_names(text))
+
+    sex_sentence = " ".join(
+        sentence
+        for sentence in _split_markdown_sentences(text)
+        if re.search(r"\b(?:male|female|gender|sex)\b", sentence, flags=re.IGNORECASE)
+    ).casefold()
+    if "female" in sex_sentence:
+        fields["sex"] = "F"
+    elif re.search(r"\bmale\b", sex_sentence):
+        fields["sex"] = "M"
+
+    birthday_year = _best_year_near_terms(text, (r"\bborn\b", r"\bbirthdate\b", r"\bbirthday\b", r"\bdate of birth\b"))
+    if birthday_year is not None:
+        fields["birth_year"] = birthday_year
+    record_year = _best_year_near_terms(text, (r"\bsample\b", r"\btested\b", r"\bassessed\b", r"\bdated\b", r"\brecorded\b", r"\bfrom\b", r"\bon\b"))
+    if record_year is not None:
+        fields["record_year"] = record_year
+
+    for sentence in _split_markdown_sentences(text):
+        lowered_sentence = sentence.casefold()
+        if (
+            "height" in lowered_sentence
+            and "weight" in lowered_sentence
+            and re.search(r"\b(?:both|placeholder|listed|recorded|fields?)\b", lowered_sentence)
+        ):
+            if re.search(r"\b0(?:\.0+)?\b", lowered_sentence):
+                fields.setdefault("height_cm", 0)
+                fields.setdefault("weight_kg", 0)
+            elif re.search(r"\b(?:nan|not available|unavailable)\b", lowered_sentence):
+                fields.setdefault("height_cm", None)
+                fields.setdefault("weight_kg", None)
+
+    numeric_specs = {
+        "height_cm": ((r"\bheight\b", r"\bstanding height\b"), ("centimeter", "centimeters", "cm")),
+        "weight_kg": ((r"\bweight\b",), ("kilogram", "kilograms", "kg")),
+        "publisher_id": ((r"\bpublisher affiliation\b", r"\bpublisher code\b", r"\bwith publisher\b", r"\bunder publisher\b", r"\bpublisher\b"), ()),
+        "alignment_id": ((r"\bmoral alignment\b", r"\balignment\b"), ()),
+        "creatinine": ((r"\bcreatinine\b", r"\bcre\b"), ("mg/dl",)),
+        "uric_acid": ((r"\buric acid\b", r"\bua\b"), ("mg/dl",)),
+        "urea_nitrogen": ((r"\burea nitrogen\b", r"\bun\b"), ("mg/dl",)),
+        "got": ((r"\bgot\b", r"\bglutamic oxaloacetic transaminase\b"), ("u/l",)),
+        "gpt": ((r"\bgpt\b", r"\bglutamic pyruvic transaminase\b"), ("u/l",)),
+        "ldh": ((r"\bldh\b", r"\blactate dehydrogenase\b"), ("u/l",)),
+        "alp": ((r"\balp\b", r"\balkaline phosphatase\b"), ("u/l",)),
+        "t_bil": ((r"\bt-bil\b", r"\btotal bilirubin\b"), ("mg/dl",)),
+    }
+    for field, (patterns, units) in numeric_specs.items():
+        if field in fields:
+            continue
+        value = _best_number_near_terms(text, patterns, unit_terms=units)
+        if value is not None:
+            fields[field] = value
+    return fields
+
+
+def _markdown_entity_key(fields: dict[str, object]) -> str | None:
+    for key in ("patient_id", "id", "cards_id"):
+        value = fields.get(key)
+        if value not in {None, ""}:
+            return f"{key}:{value}"
+    record_ids = fields.get("record_ids")
+    if isinstance(record_ids, list) and record_ids:
+        return f"record_id:{record_ids[0]}"
+    return None
+
+
+def _merge_markdown_entity_fields(
+    existing: dict[str, object],
+    incoming: dict[str, object],
+) -> None:
+    for key, value in incoming.items():
+        if key.startswith("__") or value is None or value == "":
+            continue
+        if key not in existing or existing[key] is None or existing[key] == "" or existing[key] == []:
+            existing[key] = value
+            continue
+        if key == "record_ids" and isinstance(existing.get(key), list) and isinstance(value, list):
+            seen = {str(item).casefold() for item in existing[key]}
+            for item in value:
+                if str(item).casefold() not in seen:
+                    existing[key].append(item)
+                    seen.add(str(item).casefold())
+
+
+def build_markdown_entity_table(
+    context_root: str | Path,
+    terms: object = None,
+    *,
+    question: str = "",
+    path_filters: object = None,
+    max_records: int | None = None,
+    include_evidence: bool = True,
+    evidence_chars: int = 260,
+) -> dict[str, object]:
+    """Parse markdown prose into merged row-like records keyed by IDs.
+
+    The helper is intentionally deterministic and conservative. It does not try
+    to answer the task. It extracts common record IDs, patient IDs, card IDs,
+    numeric measurements, dates, and coded affiliations from prose blocks, then
+    merges blocks that mention the same ID. This gives the model a dataframe-like
+    bridge when the true table is encoded in markdown paragraphs.
+    """
+
+    root = Path(context_root).resolve()
+    try:
+        paths = sorted(root.rglob("*.md"))
+    except Exception:  # noqa: BLE001
+        return {"records": [], "field_coverage": {}, "record_count": 0, "source_paths": []}
+
+    markdown_path_filters = _normalize_search_terms(path_filters) if path_filters is not None else []
+    if markdown_path_filters:
+        lowered_filters = [path_filter.casefold().replace("\\", "/") for path_filter in markdown_path_filters]
+
+        def path_matches_filter(path: Path) -> bool:
+            relative = _relative_path(path, root).casefold()
+            name = path.name.casefold()
+            return any(
+                relative == lowered_filter
+                or relative.endswith("/" + lowered_filter)
+                or name == lowered_filter
+                or lowered_filter in relative
+                for lowered_filter in lowered_filters
+            )
+
+        paths = [path for path in paths if path_matches_filter(path)]
+
+    records_by_key: dict[str, dict[str, object]] = {}
+    source_paths: set[str] = set()
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        relative_path = _relative_path(path, root)
+        for block_index, (heading, block) in enumerate(_split_markdown_blocks(text)):
+            fields = _extract_markdown_block_fields(block)
+            key = _markdown_entity_key(fields)
+            if key is None:
+                continue
+            source_paths.add(relative_path)
+            record = records_by_key.setdefault(
+                key,
+                {
+                    "__key": key,
+                    "__source_paths": [],
+                    "__block_indexes": [],
+                    "__evidence": [],
+                },
+            )
+            _merge_markdown_entity_fields(record, fields)
+            if relative_path not in record["__source_paths"]:
+                record["__source_paths"].append(relative_path)
+            record["__block_indexes"].append(block_index)
+            if include_evidence and len(record["__evidence"]) < 4:
+                snippet = block.replace("\r", " ").replace("\n", " ").strip()
+                if len(snippet) > evidence_chars:
+                    snippet = snippet[:evidence_chars].rstrip() + "..."
+                record["__evidence"].append(
+                    {
+                        "path": relative_path,
+                        "block_index": block_index,
+                        "heading": heading,
+                        "snippet": snippet,
+                    }
+                )
+
+    all_records = list(records_by_key.values())
+    search_terms = _normalize_search_terms(terms) if terms is not None else _question_markdown_terms(question)
+    lowered_terms = [term.casefold() for term in search_terms if term]
+
+    def rank(record: dict[str, object]) -> tuple[float, str]:
+        rendered = json.dumps(record, ensure_ascii=False).casefold()
+        score = sum(1 for term in lowered_terms if term in rendered)
+        for term in lowered_terms:
+            if term in {str(key).casefold() for key in record if not key.startswith("__")}:
+                score += 1.5
+        return (-float(score), str(record.get("__key", "")))
+
+    if lowered_terms:
+        all_records.sort(key=rank)
+    else:
+        all_records.sort(key=lambda record: str(record.get("__key", "")))
+
+    field_coverage: dict[str, int] = {}
+    for record in records_by_key.values():
+        for key, value in record.items():
+            if key.startswith("__") or value is None or value == "" or value == []:
+                continue
+            field_coverage[key] = field_coverage.get(key, 0) + 1
+
+    if max_records is not None and max_records >= 0:
+        returned_records = all_records[:max_records]
+    else:
+        returned_records = all_records
+
+    return {
+        "records": returned_records,
+        "field_coverage": dict(sorted(field_coverage.items())),
+        "record_count": len(all_records),
+        "source_paths": sorted(source_paths),
+        "note": (
+            "Rows are parsed from markdown prose and merged by patient_id/id/cards_id/record_id. "
+            "Use as grounded extraction hints and verify edge cases before finalizing."
+        ),
+    }
+
+
 def _looks_like_markdown_paths(value: object) -> bool:
     terms = _normalize_search_terms(value)
     return bool(terms) and all(
@@ -532,6 +940,7 @@ def _python_helper_modules(
         "retrieve_knowledge": functions["retrieve_knowledge"],
         "search_markdown": functions["search_markdown"],
         "extract_markdown_records": functions["extract_markdown_records"],
+        "markdown_entity_table": functions["markdown_entity_table"],
         "link_question_to_data": functions["link_question_to_data"],
     }
     json_helpers = {
@@ -545,6 +954,8 @@ def _python_helper_modules(
         "extract_markdown_records": {
             "extract_markdown_records": functions["extract_markdown_records"],
         },
+        "markdown_entity_table": {"markdown_entity_table": functions["markdown_entity_table"]},
+        "extract_markdown_table": {"extract_markdown_table": functions["markdown_entity_table"]},
         "load_json_records": {"load_json_records": functions["load_json_records"]},
         "load_json_table": {"load_json_table": functions["load_json_table"]},
         "link_question_to_data": {"link_question_to_data": functions["link_question_to_data"]},
@@ -556,6 +967,8 @@ def _python_helper_modules(
             "retrieve_knowledge": functions["retrieve_knowledge"],
             "search_markdown": functions["search_markdown"],
             "extract_markdown_records": functions["extract_markdown_records"],
+            "markdown_entity_table": functions["markdown_entity_table"],
+            "extract_markdown_table": functions["markdown_entity_table"],
             "load_json_records": functions["load_json_records"],
             "load_json_table": functions["load_json_table"],
             "link_question_to_data": functions["link_question_to_data"],
@@ -718,19 +1131,27 @@ def _numeric_filter_hints(question: str, columns: list[dict[str, object]], max_c
                 continue
             window_start = max(0, match.start() - 60)
             window_end = min(len(question), match.end() + 60)
+            phrase = question[window_start:window_end].strip()
             local_tokens = _linking_tokens(question[window_start:window_end])
+            age_context = bool(
+                {"age", "old", "older", "younger", "birth", "birthday"} & local_tokens
+            ) or "yet" in phrase.casefold()
             ranked_columns: list[tuple[float, dict[str, object]]] = []
             for column in columns:
                 column_tokens = set(column.get("tokens", []))
                 score = len(local_tokens & column_tokens)
                 if column_tokens & NUMERIC_LINKING_TERMS:
                     score += 0.5
+                if age_context and column_tokens & {"age", "birth", "birthday", "year"}:
+                    score += 3.0
+                if age_context and str(column.get("column", "")).casefold() in {"birth_year", "birthday", "birthdate"}:
+                    score += 2.0
                 if score > 0:
                     ranked_columns.append((score, column))
             ranked_columns.sort(key=lambda item: (-item[0], str(item[1]["label"])))
             hints.append(
                 {
-                    "phrase": question[window_start:window_end].strip(),
+                    "phrase": phrase,
                     "operator": operator,
                     "values": values,
                     "candidate_columns": [
@@ -1168,6 +1589,92 @@ def build_question_data_links(
                 id_value_sets=id_value_sets,
             )
 
+    markdown_entity_summary: dict[str, object] | None = None
+    if include_markdown:
+        parsed_table = build_markdown_entity_table(
+            root,
+            question_terms or None,
+            question=question,
+            max_records=None,
+            include_evidence=True,
+            evidence_chars=220,
+        )
+        parsed_records = [
+            record
+            for record in parsed_table.get("records", [])
+            if isinstance(record, dict)
+        ]
+        markdown_entity_summary = {
+            "record_count": parsed_table.get("record_count", len(parsed_records)),
+            "field_coverage": parsed_table.get("field_coverage", {}),
+            "source_paths": parsed_table.get("source_paths", []),
+            "sample_records": [
+                {
+                    key: value
+                    for key, value in record.items()
+                    if key != "__evidence"
+                }
+                for record in parsed_records[:max_candidates]
+            ],
+            "note": (
+                "These are row-like records parsed from markdown and merged by id/patient_id/cards_id. "
+                "If field_coverage contains requested fields, prefer this table over ad hoc regex snippets."
+            ),
+        }
+        parsed_field_names = sorted(
+            {
+                key
+                for record in parsed_records
+                for key, value in record.items()
+                if not key.startswith("__") and value is not None and value != "" and value != []
+            }
+        )
+        for field in parsed_field_names:
+            columns.append(
+                {
+                    "source_type": "markdown",
+                    "path": ",".join(str(path) for path in parsed_table.get("source_paths", [])) or "<markdown>",
+                    "table": "markdown_entity_table",
+                    "column": field,
+                    "label": f"markdown_entity_table.{field}",
+                    "tokens": sorted(_linking_tokens(field) | _linking_tokens("markdown entity table")),
+                }
+            )
+        for record in parsed_records:
+            row_ids = _collect_row_ids(
+                {
+                    key: value
+                    for key, value in record.items()
+                    if not key.startswith("__")
+                }
+            )
+            for field, value in record.items():
+                if field.startswith("__") or value is None or value == "" or value == []:
+                    continue
+                label = f"markdown_entity_table.{field}"
+                if _column_looks_like_id(field, value):
+                    if isinstance(value, list):
+                        values = [str(item) for item in value]
+                    else:
+                        values = [str(value)]
+                    for item in values:
+                        id_value_sets.setdefault(label, set()).add(item)
+                lowered_value = str(value).casefold()
+                for term in search_terms:
+                    if term.casefold() in lowered_value:
+                        _add_linking_value_match(
+                            value_matches,
+                            seen_matches,
+                            term=term,
+                            source_type="markdown",
+                            path=",".join(str(path) for path in record.get("__source_paths", [])) or "<markdown>",
+                            table="markdown_entity_table",
+                            column=field,
+                            example=value,
+                            row_ids=row_ids,
+                            max_per_term=max_candidates,
+                        )
+
     if include_markdown:
         row_id_terms: list[str] = []
         seen_row_ids: set[str] = set()
@@ -1329,6 +1836,7 @@ def build_question_data_links(
         "join_candidates": _join_candidates_from_id_sets(id_value_sets, max_candidates=max_candidates),
         "numeric_filters": _numeric_filter_hints(question, columns, max_candidates),
         "markdown_records": compact_markdown_records,
+        "markdown_entity_table": markdown_entity_summary,
         "unresolved_terms": unresolved,
         "note": (
             "Candidates are grounded in observed values/IDs but still require verification. "
@@ -1433,6 +1941,49 @@ def _run_python_code(
             link_depth=link_depth,
         )
 
+    def markdown_entity_table_helper(*args: object, **kwargs: Any) -> object:
+        first_arg = args[0] if args else kwargs.pop("terms", None)
+        second_arg = args[1] if len(args) > 1 else None
+        path_filters = kwargs.pop("path_filters", None) or kwargs.pop("paths", None) or kwargs.pop("files", None)
+        terms = first_arg
+
+        if first_arg is not None and _looks_like_markdown_paths(first_arg):
+            path_filters = first_arg
+            terms = second_arg
+        elif second_arg is not None:
+            terms = second_arg
+
+        pattern_terms = _terms_from_pattern(kwargs.pop("pattern", None))
+        fields = kwargs.pop("fields", None)
+        query = str(kwargs.pop("query", kwargs.pop("question", question)) or question)
+        include_metadata = bool(kwargs.pop("include_metadata", kwargs.pop("metadata", False)))
+        include_evidence = bool(kwargs.pop("include_evidence", True))
+        evidence_chars = int(kwargs.pop("evidence_chars", kwargs.pop("max_chars", 260)) or 260)
+        max_records_arg = kwargs.pop("max_records", None)
+        if max_records_arg is None:
+            max_records: int | None = None
+        else:
+            max_records = int(max_records_arg)
+
+        term_list: list[str] = []
+        if terms is not None:
+            term_list.extend(_normalize_search_terms(terms))
+        if fields is not None:
+            term_list.extend(_normalize_search_terms(fields))
+        term_list.extend(pattern_terms)
+        normalized_terms: object = _normalize_search_terms(term_list) if term_list else None
+
+        result = build_markdown_entity_table(
+            resolved_context_root,
+            normalized_terms,
+            question=query,
+            path_filters=path_filters,
+            max_records=max_records,
+            include_evidence=include_evidence,
+            evidence_chars=max(80, min(evidence_chars, 1200)),
+        )
+        return result if include_metadata else result["records"]
+
     def resolve_context_path(path: str | Path) -> Path:
         candidate = Path(path)
         resolved = candidate.resolve() if candidate.is_absolute() else (resolved_context_root / candidate).resolve()
@@ -1485,6 +2036,8 @@ def _run_python_code(
         "retrieve_knowledge": retrieve_knowledge_helper,
         "search_markdown": search_markdown_helper,
         "extract_markdown_records": extract_markdown_records_helper,
+        "markdown_entity_table": markdown_entity_table_helper,
+        "extract_markdown_table": markdown_entity_table_helper,
         "load_json_records": load_json_records_helper,
         "load_json_table": load_json_table_helper,
         "load_json_df": load_json_table_helper,
@@ -1502,6 +2055,7 @@ def _run_python_code(
                 "retrieve_knowledge": retrieve_knowledge_helper,
                 "search_markdown": search_markdown_helper,
                 "extract_markdown_records": extract_markdown_records_helper,
+                "markdown_entity_table": markdown_entity_table_helper,
                 "load_json_records": load_json_records_helper,
                 "load_json_table": load_json_table_helper,
                 "link_question_to_data": link_question_to_data_helper,
