@@ -218,6 +218,18 @@ def test_python_repair_hints_for_common_runtime_errors() -> None:
     assert any("load_json_table" in hint for hint in import_hints)
 
 
+def test_python_repair_hints_for_json_table_records_wrapper() -> None:
+    hints = _python_repair_hints(
+        {
+            "success": True,
+            "output": "Gasstations columns: ['table', 'records']\nKeyError: 'GasStationID'",
+        },
+        "import pandas as pd\ngas = pd.read_json('json/gasstations.json')\nprint(gas.columns.tolist())",
+    )
+
+    assert any("table" in hint and "records" in hint and "load_json_table" in hint for hint in hints)
+
+
 def test_final_answer_check_warns_about_likely_extra_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
@@ -332,6 +344,33 @@ def test_sanitize_answer_keeps_explicitly_requested_columns() -> None:
 
         assert answer.columns == ["ID", "SEX", "Diagnosis"]
         assert answer.rows == [["163109", "F", "SLE"]]
+
+
+def test_sanitize_answer_drops_incomplete_row_list_rows() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_null_rows",
+                difficulty="easy",
+                question="For patients with severe degree of thrombosis, list their ID, sex and disease the patient is diagnosed with.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["ID", "SEX", "Diagnosis"],
+                rows=[
+                    ["163109", "F", "SLE"],
+                    ["1430760", "nan", "nan"],
+                    ["2803470", "F", "SLE"],
+                ],
+            ),
+        )
+
+        assert answer.columns == ["ID", "SEX", "Diagnosis"]
+        assert answer.rows == [["163109", "F", "SLE"], ["2803470", "F", "SLE"]]
 
 
 def test_sanitize_answer_keeps_name_and_requested_metric_columns() -> None:

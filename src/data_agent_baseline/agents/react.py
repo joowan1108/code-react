@@ -575,9 +575,37 @@ def _remove_high_confidence_extra_columns(task: PublicTask, answer: AnswerTable)
     return answer
 
 
+def _is_missing_answer_cell(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and value != value:
+        return True
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        return normalized in {"", "nan", "none", "null", "nat", "<na>"}
+    return False
+
+
+def _drop_incomplete_answer_rows(task: PublicTask, answer: AnswerTable) -> AnswerTable:
+    if not _question_expects_nonempty_rows(task.question):
+        return answer
+    if not answer.rows:
+        return answer
+
+    complete_rows = [
+        row
+        for row in answer.rows
+        if len(row) == len(answer.columns) and not any(_is_missing_answer_cell(cell) for cell in row)
+    ]
+    if not complete_rows or len(complete_rows) == len(answer.rows):
+        return answer
+    return AnswerTable(columns=list(answer.columns), rows=complete_rows)
+
+
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
     normalized = _normalize_answer_table(answer)
-    return _remove_high_confidence_extra_columns(task, normalized)
+    complete_rows = _drop_incomplete_answer_rows(task, normalized)
+    return _remove_high_confidence_extra_columns(task, complete_rows)
 
 
 def _answer_projection_preview(task: PublicTask, answer: AnswerTable) -> dict[str, object] | None:
@@ -657,6 +685,15 @@ def _python_repair_hints(content: dict[str, object], code: str) -> list[str]:
         add("Column name is wrong; inspect PRAGMA table_info or dataframe columns and use exact names.")
     if "keyerror" in lowered:
         add("Pandas KeyError usually means an exact column mismatch; print df.columns.tolist() before selecting.")
+    if (
+        re.search(r"columns?:\s*\[?['\"]table['\"]\s*,\s*['\"]records['\"]", lowered)
+        or re.search(r"\btable\s+records\b", lowered)
+        or ("read_json" in code.casefold() and {"table", "records"} <= set(re.findall(r"[a-z_]+", lowered)))
+    ):
+        add(
+            "JSON appears to be a wrapper with `table` and `records`; reload it with "
+            "`load_json_table('json/file.json')` or `load_json_records('json/file.json')` instead of pd.read_json."
+        )
     if "file not found" in lowered or "no such file or directory" in lowered:
         add("Use paths relative to the task context directory exactly as shown in the manifest.")
     if "timed out" in lowered:
