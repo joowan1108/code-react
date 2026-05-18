@@ -373,6 +373,37 @@ def test_sanitize_answer_drops_incomplete_row_list_rows() -> None:
         assert answer.rows == [["163109", "F", "SLE"], ["2803470", "F", "SLE"]]
 
 
+def test_sanitize_answer_keeps_single_missing_requested_value() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_nullable_answer",
+                difficulty="medium",
+                question="List the school name and charter funding type for the qualified schools.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["School Name", "Charter Funding Type"],
+                rows=[
+                    ["River Springs Charter", "Directly funded"],
+                    ["Arlington High", None],
+                    ["Polytechnic High", ""],
+                ],
+            ),
+        )
+
+        assert answer.columns == ["School Name", "Charter Funding Type"]
+        assert answer.rows == [
+            ["River Springs Charter", "Directly funded"],
+            ["Arlington High", None],
+            ["Polytechnic High", ""],
+        ]
+
+
 def test_sanitize_answer_keeps_name_and_requested_metric_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)

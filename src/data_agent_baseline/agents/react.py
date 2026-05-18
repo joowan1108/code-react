@@ -592,14 +592,20 @@ def _drop_incomplete_answer_rows(task: PublicTask, answer: AnswerTable) -> Answe
     if not answer.rows:
         return answer
 
-    complete_rows = [
-        row
-        for row in answer.rows
-        if len(row) == len(answer.columns) and not any(_is_missing_answer_cell(cell) for cell in row)
-    ]
-    if not complete_rows or len(complete_rows) == len(answer.rows):
+    kept_rows: list[list[object]] = []
+    for row in answer.rows:
+        if len(row) != len(answer.columns):
+            continue
+        missing_count = sum(1 for cell in row if _is_missing_answer_cell(cell))
+        # A single missing requested value can be the correct answer. Multiple
+        # missing cells in one row are a stronger signal of a failed join.
+        if missing_count >= 2:
+            continue
+        kept_rows.append(row)
+
+    if not kept_rows or len(kept_rows) == len(answer.rows):
         return answer
-    return AnswerTable(columns=list(answer.columns), rows=complete_rows)
+    return AnswerTable(columns=list(answer.columns), rows=kept_rows)
 
 
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
