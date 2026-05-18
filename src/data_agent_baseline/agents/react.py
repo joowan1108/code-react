@@ -814,40 +814,18 @@ def _build_difficulty_final_answer_reminder(task: PublicTask, state: AgentRuntim
         return None
 
     difficulty = task.difficulty.casefold()
-    if difficulty == "easy":
-        return "\n".join(
-            [
-                "FINAL ANSWER REMINDER (easy):",
-                f"- Question: {task.question}",
-                "- Submit only the columns directly requested by the question.",
-                "- If multiple rows match the entity/filter, include all final rows; do not keep only the first row.",
-                "- Remove helper/debug/join-key/source columns unless the question asks for them.",
-                "- For similar fields such as rank/position, number/id, or date/datetime, verify the field meaning in the data before submitting.",
-            ]
-        )
-
-    if difficulty == "medium":
-        lines = [
-            "FINAL ANSWER REMINDER (medium):",
+    if difficulty != "easy":
+        return None
+    return "\n".join(
+        [
+            "FINAL ANSWER REMINDER (easy):",
             f"- Question: {task.question}",
-            "- Keep the final answer shape tied to the question, not to intermediate helper dataframes.",
-            "- Submit only requested result columns; remove join keys, filters, debug columns, and explanation columns.",
-            "- If a join/filter leaves too few or zero rows, verify key normalization and whether another table/file contains the matching entity.",
+            "- Submit only the columns directly requested by the question.",
+            "- If multiple rows match the entity/filter, include all final rows; do not keep only the first row.",
+            "- Remove helper/debug/join-key/source columns unless the question asks for them.",
+            "- For similar fields such as rank/position, number/id, or date/datetime, verify the field meaning in the data before submitting.",
         ]
-        if _question_requests_multiple_metrics(task.question):
-            lines.append(
-                "- The question asks for multiple metrics; return one result column per requested metric rather than collapsing to one value."
-            )
-            lines.append(
-                "- For separate aggregates such as AVG(A), AVG(B), preserve per-column null semantics instead of filtering all metrics by one column's nulls."
-            )
-        elif _question_is_single_value(task.question):
-            lines.append("- The question appears to ask for one metric; return one row with one value column.")
-        elif _question_expects_nonempty_rows(task.question):
-            lines.append("- The question appears to ask for rows; include every supported matching row.")
-        return "\n".join(lines)
-
-    return None
+    )
 
 
 def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, object] | None:
