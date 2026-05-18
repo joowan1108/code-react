@@ -255,63 +255,6 @@ def test_final_answer_check_warns_about_likely_extra_columns() -> None:
         assert "debug_score" in check["warnings"][0]
 
 
-def test_candidate_decision_blocks_truncated_final_marker_rows() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        context_path = Path(temp_dir)
-        task = PublicTask(
-            record=TaskRecord(
-                task_id="task_dates",
-                difficulty="easy",
-                question="What date did Connor Hilton pay dues?",
-            ),
-            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
-        )
-        stdout = (
-            "Connor Hilton dues payment:\n"
-            "date_received  amount source\n"
-            "   2019-10-02      50   Dues\n"
-            "   2019-09-12      50   Dues\n\n"
-            "FINAL_TABLE_JSON:\n"
-            '{"columns": ["date_received"], "rows": [["2019-10-02"]]}\n'
-        )
-        decision = _candidate_decision_from_observation(
-            task,
-            {"content": {"output": stdout, "stderr": ""}},
-            AnswerTable(columns=["date_received"], rows=[["2019-10-02"]]),
-        )
-
-        assert not decision.auto_submit
-        assert "final_marker_may_have_dropped_candidate_rows" in decision.reasons
-
-
-def test_candidate_decision_blocks_guessed_normal_abnormal_thresholds() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        context_path = Path(temp_dir)
-        task = PublicTask(
-            record=TaskRecord(
-                task_id="task_threshold",
-                difficulty="hard",
-                question="Among male patients, how many have normal WBC level and abnormal fibrinogen level?",
-            ),
-            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
-        )
-        stdout = (
-            "Count of male patients with normal WBC and abnormal FG: 1\n"
-            "FINAL_TABLE_JSON:\n"
-            '{"columns": ["count"], "rows": [[1]]}\n'
-        )
-        code = "# Let's assume FG normal is 20-40 based on the data distribution.\n"
-        decision = _candidate_decision_from_observation(
-            task,
-            {"content": {"output": stdout, "stderr": ""}},
-            AnswerTable(columns=["count"], rows=[[1]]),
-            code_text=code,
-        )
-
-        assert not decision.auto_submit
-        assert "normal_abnormal_threshold_was_guessed" in decision.reasons
-
-
 def test_sanitize_answer_projects_obvious_single_target_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)

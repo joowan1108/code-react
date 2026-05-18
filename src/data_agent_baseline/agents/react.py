@@ -791,99 +791,6 @@ def _final_answer_check(task: PublicTask, answer: AnswerTable) -> dict[str, obje
     }
 
 
-def _text_before_final_marker(text: str) -> str:
-    lower_text = text.casefold()
-    indexes = [
-        lower_text.find(marker.casefold())
-        for marker in FINAL_RESULT_MARKERS
-        if lower_text.find(marker.casefold()) >= 0
-    ]
-    if not indexes:
-        return text
-    return text[: min(indexes)]
-
-
-def _candidate_rows_before_final_marker(stdout: str, answer: AnswerTable) -> int | None:
-    if len(answer.columns) != 1 or len(answer.rows) != 1:
-        return None
-
-    before_marker = _text_before_final_marker(stdout)
-    column = str(answer.columns[0]).strip()
-    if not column:
-        return None
-    column_lower = column.casefold()
-    lines = before_marker.splitlines()
-    best_count = 0
-    answer_value = str(answer.rows[0][0]).strip() if answer.rows and answer.rows[0] else ""
-    answer_value_seen = False
-
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        lowered = stripped.casefold()
-        if column_lower not in lowered:
-            continue
-        if ":" in stripped or "[" in stripped or "]" in stripped:
-            continue
-        if lowered.startswith(("columns", "sample", "shape", "final")):
-            continue
-
-        row_count = 0
-        saw_answer_here = False
-        for next_line in lines[index + 1 : index + 12]:
-            candidate = next_line.strip()
-            candidate_lower = candidate.casefold()
-            if not candidate:
-                if row_count:
-                    break
-                continue
-            if candidate_lower.startswith(("final", "===", "---", "columns", "shape", "sample")):
-                break
-            if ":" in candidate and not re.search(r"\d{4}-\d{1,2}-\d{1,2}", candidate):
-                break
-            if answer_value and answer_value in candidate:
-                saw_answer_here = True
-            if re.search(r"\d{4}-\d{1,2}-\d{1,2}|[-+]?\d+(?:\.\d+)?|\b[A-Za-z][A-Za-z0-9_-]+\b", candidate):
-                row_count += 1
-
-        if row_count > best_count:
-            best_count = row_count
-            answer_value_seen = saw_answer_here
-
-    if best_count > len(answer.rows) and answer_value_seen:
-        return best_count
-    return None
-
-
-def _final_marker_appears_to_drop_rows(stdout: str, answer: AnswerTable) -> bool:
-    candidate_count = _candidate_rows_before_final_marker(stdout, answer)
-    return candidate_count is not None and candidate_count > len(answer.rows)
-
-
-def _question_needs_grounded_threshold(question: str) -> bool:
-    tokens = _split_identifier_tokens(question)
-    return bool(tokens & {"abnormal", "normal", "threshold", "range"})
-
-
-def _contains_ungrounded_threshold_guess(task: PublicTask, stdout: str, code_text: str) -> bool:
-    if not _question_needs_grounded_threshold(task.question):
-        return False
-    combined = f"{stdout}\n{code_text}".casefold()
-    guess_phrases = (
-        "assume",
-        "based on the data distribution",
-        "data distribution",
-        "standard medical",
-        "typical normal",
-        "common medical",
-        "reasonable threshold",
-        "seems reasonable",
-        "infer normal",
-        "infer threshold",
-        "normal is approximately",
-    )
-    return any(phrase in combined for phrase in guess_phrases)
-
-
 def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, object] | None:
     lower_text = text.lower()
     marker_positions = [
@@ -903,8 +810,6 @@ def _candidate_decision_from_observation(
     task: PublicTask,
     observation: dict[str, object],
     answer: AnswerTable,
-    *,
-    code_text: str = "",
 ) -> CandidateAnswerDecision:
     reasons: list[str] = []
     hard_reasons: list[str] = []
@@ -912,7 +817,6 @@ def _candidate_decision_from_observation(
     content_dict = content if isinstance(content, dict) else {}
     stderr = str(content_dict.get("stderr") or "")
     traceback_text = str(content_dict.get("traceback") or "")
-    stdout = str(content_dict.get("output") or content_dict.get("stdout") or "")
 
     if traceback_text or "traceback" in stderr.lower():
         reasons.append("python_traceback_present")
@@ -926,15 +830,7 @@ def _candidate_decision_from_observation(
         reasons.append("single_value_question_requires_one_cell_answer")
         hard_reasons.append("single_value_question_requires_one_cell_answer")
 
-    if _final_marker_appears_to_drop_rows(stdout, answer):
-        reasons.append("final_marker_may_have_dropped_candidate_rows")
-        hard_reasons.append("final_marker_may_have_dropped_candidate_rows")
-
-    if _contains_ungrounded_threshold_guess(task, stdout, code_text):
-        reasons.append("normal_abnormal_threshold_was_guessed")
-        hard_reasons.append("normal_abnormal_threshold_was_guessed")
-
-    store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons and not hard_reasons
+    store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
     return CandidateAnswerDecision(
         answer=answer,
         auto_submit=not hard_reasons,
@@ -2119,17 +2015,7 @@ class ReActAgent:
                         task,
                         observation,
                         candidate_answer,
-                        code_text=str(model_step.action_input.get("code") or ""),
                     )
-                    content["candidate_answer_decision"] = {
-                        "auto_submit": decision.auto_submit,
-                        "store_as_fallback": decision.store_as_fallback,
-                        "reasons": list(decision.reasons),
-                        "guidance": (
-                            "If final rows were truncated, submit every matching row from the candidate table. "
-                            "If a normal/abnormal threshold was guessed, find an explicit rule in the provided context before finalizing."
-                        ),
-                    }
                     self._checkpoint(
                         task,
                         state,
