@@ -1038,6 +1038,32 @@ def test_codeact_task_prompt_mentions_markdown_helpers_only_for_document_markdow
 
         assert "extract_markdown_records" in prompt
         assert "after checking structured data" in prompt
+        assert "do not force `markdown_entity_table()`" in prompt
+
+
+def test_codeact_task_prompt_mentions_markdown_entity_table_only_for_row_like_docs() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "doc").mkdir()
+        (context_path / "doc" / "heroes.md").write_text(
+            "The operative Alpha, registered under ID 7, has height 175. "
+            "Her publisher affiliation is code 13.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hero_doc",
+                difficulty="hard",
+                question="What percentage of heroes with height between 150 and 180 are published by Marvel Comics?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "pd.DataFrame(markdown_entity_table())" in prompt
+        assert "include_metadata=True" in prompt
+        assert "not as direct DataFrame input" in prompt
 
 
 def test_context_manifest_summarizes_structured_files() -> None:
@@ -1367,6 +1393,7 @@ def test_link_question_to_data_links_markdown_entities_to_structured_ids() -> No
         assert "recykdvf4LgsyA3wZ" in rendered
         assert "recvKTAWAFKkVNnXQ" in rendered
         assert "usable_filter" in rendered
+        assert links["markdown_entity_table"] is None
 
 
 def test_link_question_to_data_handles_structured_only_entity_and_join_hints() -> None:

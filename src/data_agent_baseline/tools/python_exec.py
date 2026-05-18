@@ -251,6 +251,72 @@ ROW_MATCH_GENERIC_TOKENS = {
     "type",
     "year",
 }
+MARKDOWN_ENTITY_TABLE_TRIGGER_TERMS = {
+    "age",
+    "alignment",
+    "alp",
+    "birth",
+    "birthday",
+    "bilirubin",
+    "born",
+    "cre",
+    "creatinine",
+    "gender",
+    "got",
+    "gpt",
+    "height",
+    "hero",
+    "heroes",
+    "ldh",
+    "patient",
+    "patients",
+    "publisher",
+    "sex",
+    "superhero",
+    "superheroes",
+    "t",
+    "tbill",
+    "urea",
+    "uric",
+    "weight",
+}
+MARKDOWN_ENTITY_TABLE_AVOID_TERMS = {
+    "advertisement",
+    "allocation",
+    "amount",
+    "budget",
+    "budgets",
+    "card",
+    "cards",
+    "commander",
+    "content",
+    "event",
+    "format",
+    "legal",
+    "legality",
+    "meeting",
+    "status",
+    "warning",
+}
+MARKDOWN_ENTITY_TABLE_FIELDS = {
+    "alignment_id",
+    "alp",
+    "birth_year",
+    "cards_id",
+    "creatinine",
+    "got",
+    "gpt",
+    "height_cm",
+    "ldh",
+    "patient_id",
+    "publisher_id",
+    "record_year",
+    "sex",
+    "t_bil",
+    "urea_nitrogen",
+    "uric_acid",
+    "weight_kg",
+}
 
 
 def _question_markdown_terms(question: str) -> list[str]:
@@ -1502,6 +1568,48 @@ def _join_candidates_from_id_sets(id_value_sets: dict[str, set[str]], *, max_can
     ]
 
 
+def _question_prefers_markdown_entity_table(question: str) -> bool:
+    tokens = _linking_tokens(question)
+    positive = bool(tokens & MARKDOWN_ENTITY_TABLE_TRIGGER_TERMS)
+    negative = bool(tokens & MARKDOWN_ENTITY_TABLE_AVOID_TERMS)
+    if not positive:
+        return False
+    if negative and not (tokens & {"height", "publisher", "patient", "patients", "creatinine", "birth", "birthday", "age"}):
+        return False
+    return True
+
+
+def _markdown_entity_table_is_relevant(
+    question: str,
+    parsed_table: dict[str, object],
+) -> bool:
+    if not _question_prefers_markdown_entity_table(question):
+        return False
+    field_coverage = parsed_table.get("field_coverage")
+    if not isinstance(field_coverage, dict):
+        return False
+    record_count = int(parsed_table.get("record_count", 0) or 0)
+    if record_count < 1:
+        return False
+    fields = {str(field) for field, count in field_coverage.items() if int(count or 0) > 0}
+    if not fields & MARKDOWN_ENTITY_TABLE_FIELDS:
+        return False
+
+    question_tokens = _linking_tokens(question)
+    field_tokens = {
+        token
+        for field in fields
+        for token in _linking_tokens(field)
+    }
+    if question_tokens & field_tokens:
+        return True
+    if question_tokens & {"hero", "heroes", "superhero", "superheroes"} and fields & {"id", "height_cm", "publisher_id"}:
+        return True
+    if question_tokens & {"patient", "patients"} and fields & {"patient_id", "birth_year", "creatinine"}:
+        return True
+    return False
+
+
 def build_question_data_links(
     context_root: str | Path,
     question: str,
@@ -1590,7 +1698,7 @@ def build_question_data_links(
             )
 
     markdown_entity_summary: dict[str, object] | None = None
-    if include_markdown:
+    if include_markdown and _question_prefers_markdown_entity_table(question):
         parsed_table = build_markdown_entity_table(
             root,
             question_terms or None,
@@ -1599,81 +1707,84 @@ def build_question_data_links(
             include_evidence=True,
             evidence_chars=220,
         )
+        if not _markdown_entity_table_is_relevant(question, parsed_table):
+            parsed_table = {}
         parsed_records = [
             record
             for record in parsed_table.get("records", [])
             if isinstance(record, dict)
         ]
-        markdown_entity_summary = {
-            "record_count": parsed_table.get("record_count", len(parsed_records)),
-            "field_coverage": parsed_table.get("field_coverage", {}),
-            "source_paths": parsed_table.get("source_paths", []),
-            "sample_records": [
-                {
-                    key: value
-                    for key, value in record.items()
-                    if key != "__evidence"
-                }
-                for record in parsed_records[:max_candidates]
-            ],
-            "note": (
-                "These are row-like records parsed from markdown and merged by id/patient_id/cards_id. "
-                "If field_coverage contains requested fields, prefer this table over ad hoc regex snippets."
-            ),
-        }
-        parsed_field_names = sorted(
-            {
-                key
-                for record in parsed_records
-                for key, value in record.items()
-                if not key.startswith("__") and value is not None and value != "" and value != []
+        if parsed_records:
+            markdown_entity_summary = {
+                "record_count": parsed_table.get("record_count", len(parsed_records)),
+                "field_coverage": parsed_table.get("field_coverage", {}),
+                "source_paths": parsed_table.get("source_paths", []),
+                "sample_records": [
+                    {
+                        key: value
+                        for key, value in record.items()
+                        if key != "__evidence"
+                    }
+                    for record in parsed_records[:max_candidates]
+                ],
+                "note": (
+                    "These are row-like records parsed from markdown and merged by id/patient_id/cards_id. "
+                    "Use only when field_coverage directly contains requested entity attributes."
+                ),
             }
-        )
-        for field in parsed_field_names:
-            columns.append(
+            parsed_field_names = sorted(
                 {
-                    "source_type": "markdown",
-                    "path": ",".join(str(path) for path in parsed_table.get("source_paths", [])) or "<markdown>",
-                    "table": "markdown_entity_table",
-                    "column": field,
-                    "label": f"markdown_entity_table.{field}",
-                    "tokens": sorted(_linking_tokens(field) | _linking_tokens("markdown entity table")),
-                }
-            )
-        for record in parsed_records:
-            row_ids = _collect_row_ids(
-                {
-                    key: value
+                    key
+                    for record in parsed_records
                     for key, value in record.items()
-                    if not key.startswith("__")
+                    if not key.startswith("__") and value is not None and value != "" and value != []
                 }
             )
-            for field, value in record.items():
-                if field.startswith("__") or value is None or value == "" or value == []:
-                    continue
-                label = f"markdown_entity_table.{field}"
-                if _column_looks_like_id(field, value):
-                    if isinstance(value, list):
-                        values = [str(item) for item in value]
-                    else:
-                        values = [str(value)]
-                    for item in values:
-                        id_value_sets.setdefault(label, set()).add(item)
-                lowered_value = str(value).casefold()
-                for term in search_terms:
-                    if term.casefold() in lowered_value:
-                        _add_linking_value_match(
-                            value_matches,
-                            seen_matches,
-                            term=term,
-                            source_type="markdown",
-                            path=",".join(str(path) for path in record.get("__source_paths", [])) or "<markdown>",
-                            table="markdown_entity_table",
-                            column=field,
-                            example=value,
-                            row_ids=row_ids,
-                            max_per_term=max_candidates,
-                        )
+            for field in parsed_field_names:
+                columns.append(
+                    {
+                        "source_type": "markdown",
+                        "path": ",".join(str(path) for path in parsed_table.get("source_paths", [])) or "<markdown>",
+                        "table": "markdown_entity_table",
+                        "column": field,
+                        "label": f"markdown_entity_table.{field}",
+                        "tokens": sorted(_linking_tokens(field) | _linking_tokens("markdown entity table")),
+                    }
+                )
+            for record in parsed_records:
+                row_ids = _collect_row_ids(
+                    {
+                        key: value
+                        for key, value in record.items()
+                        if not key.startswith("__")
+                    }
+                )
+                for field, value in record.items():
+                    if field.startswith("__") or value is None or value == "" or value == []:
+                        continue
+                    label = f"markdown_entity_table.{field}"
+                    if _column_looks_like_id(field, value):
+                        if isinstance(value, list):
+                            values = [str(item) for item in value]
+                        else:
+                            values = [str(value)]
+                        for item in values:
+                            id_value_sets.setdefault(label, set()).add(item)
+                    lowered_value = str(value).casefold()
+                    for term in search_terms:
+                        if term.casefold() in lowered_value:
+                            _add_linking_value_match(
+                                value_matches,
+                                seen_matches,
+                                term=term,
+                                source_type="markdown",
+                                path=",".join(str(path) for path in record.get("__source_paths", [])) or "<markdown>",
+                                table="markdown_entity_table",
+                                column=field,
+                                example=value,
+                                row_ids=row_ids,
+                                max_per_term=max_candidates,
+                            )
 
     if include_markdown:
         row_id_terms: list[str] = []

@@ -127,6 +127,44 @@ KNOWLEDGE_TRIGGER_TERMS = {
     "warning",
 }
 
+MARKDOWN_ENTITY_PROMPT_TRIGGER_TERMS = {
+    "age",
+    "alignment",
+    "birth",
+    "birthday",
+    "born",
+    "creatinine",
+    "gender",
+    "height",
+    "hero",
+    "heroes",
+    "patient",
+    "patients",
+    "publisher",
+    "sex",
+    "superhero",
+    "superheroes",
+    "weight",
+}
+
+MARKDOWN_ENTITY_PROMPT_AVOID_TERMS = {
+    "advertisement",
+    "amount",
+    "budget",
+    "budgets",
+    "card",
+    "cards",
+    "commander",
+    "content",
+    "event",
+    "format",
+    "legal",
+    "legality",
+    "meeting",
+    "status",
+    "warning",
+}
+
 
 def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None) -> str:
     base_prompt = system_prompt or REACT_SYSTEM_PROMPT
@@ -148,8 +186,6 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "table, column, or observed record value before computing. "
             "If a mention, quoted value, markdown ID, or prose rule is hard to connect to columns, call "
             "`link_question_to_data(max_candidates=5)` once for grounded entity/value links before repeating searches. "
-            "When document markdown encodes many row-like prose records, use `markdown_entity_table(include_metadata=True)` "
-            "or `pd.DataFrame(markdown_entity_table())` to parse it into merged rows before regexing manually. "
             "Use direct markdown helper calls only when structured CSV/JSON/SQLite evidence is missing or a real rule, "
             "threshold, linked prose record, or coded meaning must be retrieved from markdown. "
             "Do not include an `Observation:` or `Output:` section; the runtime will provide observations."
@@ -197,6 +233,17 @@ def _knowledge_reminder(task: PublicTask) -> str:
     )
 
 
+def _should_prompt_markdown_entity_table(task: PublicTask) -> bool:
+    question_tokens = _tokens(task.question)
+    if not question_tokens & MARKDOWN_ENTITY_PROMPT_TRIGGER_TERMS:
+        return False
+    if question_tokens & MARKDOWN_ENTITY_PROMPT_AVOID_TERMS and not (
+        question_tokens & {"age", "birth", "birthday", "creatinine", "height", "patient", "patients", "publisher"}
+    ):
+        return False
+    return True
+
+
 def _markdown_helper_note(task: PublicTask) -> str:
     try:
         markdown_paths = list(task.context_dir.rglob("*.md"))
@@ -205,10 +252,19 @@ def _markdown_helper_note(task: PublicTask) -> str:
     has_document_markdown = any(path.name != "knowledge.md" for path in markdown_paths)
     if not has_document_markdown:
         return ""
+    if _should_prompt_markdown_entity_table(task):
+        return (
+            "Use markdown helpers only after checking structured data. If document markdown stores repeated "
+            "entity/patient/hero rows with attributes such as height, publisher, birth year, sex, or lab values, "
+            "use `pd.DataFrame(markdown_entity_table())`; use `markdown_entity_table(include_metadata=True)` only "
+            "to inspect field_coverage/source_paths, not as direct DataFrame input. For compact rule/status/budget "
+            "blocks, prefer `extract_markdown_records([...])` or `search_markdown([...])`. "
+        )
     return (
         "Use markdown helpers only after checking structured data. If a needed value, rule, or link is only "
-        "inside document markdown, prefer `markdown_entity_table()` for repeated row-like prose records; use "
-        "`extract_markdown_records([...])` or `search_markdown([...])` for a small number of compact blocks. "
+        "inside document markdown, prefer `extract_markdown_records([...])` or `search_markdown([...])` for compact "
+        "blocks. For legal/status/budget/event/card relationships, do not force `markdown_entity_table()` unless "
+        "a quick metadata check shows row-like entity fields that directly match the question. "
     )
 
 
@@ -228,8 +284,6 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "column/table/record or markdown rule that implements it, then verify it against observed data. "
             "When the final connection between question terms, markdown record IDs, and real columns is unclear, "
             "call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates. "
-            "If document markdown is effectively a table written as prose, call `markdown_entity_table(include_metadata=True)` "
-            "or convert `markdown_entity_table()` to a DataFrame and use the parsed id/field columns. "
             "For JSON files, prefer direct `load_json_table(\"json/file.json\")` or `load_json_records(\"json/file.json\")` calls "
             "instead of manually guessing whether the payload is a list or a `{table, records}` wrapper. "
             f"{_markdown_helper_note(task)}"
