@@ -268,13 +268,10 @@ MARKDOWN_ENTITY_TABLE_TRIGGER_TERMS = {
     "hero",
     "heroes",
     "ldh",
-    "patient",
-    "patients",
     "publisher",
     "sex",
     "superhero",
     "superheroes",
-    "t",
     "tbill",
     "urea",
     "uric",
@@ -1574,7 +1571,7 @@ def _question_prefers_markdown_entity_table(question: str) -> bool:
     negative = bool(tokens & MARKDOWN_ENTITY_TABLE_AVOID_TERMS)
     if not positive:
         return False
-    if negative and not (tokens & {"height", "publisher", "patient", "patients", "creatinine", "birth", "birthday", "age"}):
+    if negative and not (tokens & {"height", "publisher", "creatinine", "birth", "birthday", "age"}):
         return False
     return True
 

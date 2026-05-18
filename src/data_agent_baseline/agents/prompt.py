@@ -138,8 +138,6 @@ MARKDOWN_ENTITY_PROMPT_TRIGGER_TERMS = {
     "height",
     "hero",
     "heroes",
-    "patient",
-    "patients",
     "publisher",
     "sex",
     "superhero",
@@ -184,6 +182,8 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "For SQLite files, rely on the manifest's sqlite_master and PRAGMA schema before writing joins. "
             "Do not assume concepts that are absent from the schema; map every requested concept to a real "
             "table, column, or observed record value before computing. "
+            "For normal/abnormal/range wording, never infer thresholds from data distribution or common medical "
+            "knowledge; use an explicit rule found in the provided data or markdown. "
             "If a mention, quoted value, markdown ID, or prose rule is hard to connect to columns, call "
             "`link_question_to_data(max_candidates=5)` once for grounded entity/value links before repeating searches. "
             "Use direct markdown helper calls only when structured CSV/JSON/SQLite evidence is missing or a real rule, "
@@ -238,7 +238,7 @@ def _should_prompt_markdown_entity_table(task: PublicTask) -> bool:
     if not question_tokens & MARKDOWN_ENTITY_PROMPT_TRIGGER_TERMS:
         return False
     if question_tokens & MARKDOWN_ENTITY_PROMPT_AVOID_TERMS and not (
-        question_tokens & {"age", "birth", "birthday", "creatinine", "height", "patient", "patients", "publisher"}
+        question_tokens & {"age", "birth", "birthday", "creatinine", "height", "publisher"}
     ):
         return False
     return True
@@ -282,6 +282,8 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If a question concept is not present in the schema, do not invent or assume it; find the concrete "
             "column/table/record or markdown rule that implements it, then verify it against observed data. "
+            "For normal/abnormal/range wording, do not guess thresholds from distribution or outside knowledge; "
+            "only filter after finding an explicit rule in the provided context. "
             "When the final connection between question terms, markdown record IDs, and real columns is unclear, "
             "call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates. "
             "For JSON files, prefer direct `load_json_table(\"json/file.json\")` or `load_json_records(\"json/file.json\")` calls "
