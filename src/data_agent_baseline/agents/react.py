@@ -343,9 +343,27 @@ def _split_identifier_tokens(text: str) -> set[str]:
     return expanded
 
 
+def _question_requests_multiple_metrics(question: str) -> bool:
+    q = question.lower()
+    metric_terms = ("average", "avg", "mean", "sum", "total", "count", "percentage", "percent", "ratio")
+    metric_mentions = re.findall(r"\b(?:average|avg|mean|sum|total|count|percentage|percent|ratio)\b", q)
+    if len(metric_mentions) >= 2 and re.search(r"\b(?:and|,)\b", q):
+        return True
+    if re.search(
+        r"\b(?:average|avg|mean|sum|total|count)\s+of\b.+\band\b.+\b(?:average|avg|mean|sum|total|count)\b",
+        q,
+    ):
+        return True
+    if sum(1 for term in metric_terms if term in q) >= 2 and re.search(r"\b(?:and|,)\b", q):
+        return True
+    return False
+
+
 def _question_is_single_value(question: str) -> bool:
     q = question.lower()
     tokens = _split_identifier_tokens(question)
+    if _question_requests_multiple_metrics(question):
+        return False
     if any(phrase in q for phrase in ("how many", "how much", "what percentage", "calculate the percentage")):
         return True
     if any(
@@ -791,81 +809,45 @@ def _final_answer_check(task: PublicTask, answer: AnswerTable) -> dict[str, obje
     }
 
 
-def _recent_step_has_final_candidate(state: AgentRuntimeState) -> bool:
-    for step in state.steps[-2:]:
-        content = step.observation.get("content")
-        if not isinstance(content, dict):
-            continue
-        output = str(content.get("output") or content.get("stdout") or "")
-        if any(marker.casefold() in output.casefold() for marker in FINAL_RESULT_MARKERS):
-            return True
-    return False
-
-
-def _likely_final_output_hints(question: str) -> list[str]:
-    lowered = question.casefold()
-    tokens = _split_identifier_tokens(question)
-    hints: list[str] = []
-
-    def add(hint: str) -> None:
-        if hint not in hints:
-            hints.append(hint)
-
-    if _question_is_single_value(question):
-        add("single value: submit exactly one row and one value column")
-    elif _question_expects_nonempty_rows(question):
-        add("row list: include every matching row, not just the first match")
-
-    if re.search(r"\bstate the date\b|\bwhat date\b|\bwhich date\b", lowered):
-        add("requested output looks like date only; exclude amount/source/debug columns unless asked")
-    if "finish time" in lowered:
-        add("requested output looks like time only")
-    if re.search(r"\bnumber of the driver\b|\bdriver number\b|\bhis number\b|\bher number\b", lowered):
-        add("requested output is a driver/person number; if multiple tables have number, verify the entity table too")
-    if re.search(r"\bwhich race\b|\bwhat race\b", lowered):
-        add("requested output looks like race name/title only")
-    if re.search(r"\bcountries\b|\bcountry\b", lowered):
-        add("requested output looks like country only")
-    if "ranked" in tokens:
-        add("word 'ranked' should check a rank column before substituting position/order")
-    if tokens & {"finished", "finish", "position", "place"}:
-        add("finish/position wording should verify position/positionOrder semantics")
-    if "per unit" in lowered:
-        add("per-unit wording usually requires total price divided by amount/quantity, not total price alone")
-    if "average monthly" in lowered or "monthly average" in lowered:
-        add("average monthly wording may require annual total divided by 12; verify the metric definition")
-    if tokens & {"transaction", "transactions", "withdrawal", "withdrawals", "record", "records"}:
-        add("when listing records without named attributes, prefer stable ID columns over all debug columns")
-    if re.search(r"\ball\b|\blist\b|\blist all\b", lowered):
-        add("all/list wording: do not collapse multiple matching rows into one row")
-
-    return hints[:6]
-
-
-def _build_final_answer_contract(task: PublicTask, state: AgentRuntimeState) -> str | None:
+def _build_difficulty_final_answer_reminder(task: PublicTask, state: AgentRuntimeState) -> str | None:
     if not state.steps:
         return None
 
-    question_type = _likely_question_type(task.question)
-    hints = _likely_final_output_hints(task.question)
-    lines = [
-        "FINAL ANSWER CONTRACT:",
-        f"- Original question: {task.question}",
-        f"- Expected answer type: {question_type}.",
-        "- Submit only columns directly requested by the question.",
-        "- Do not carry over helper, join-key, filter, sort, debug, source, or verification columns unless the question asks for them.",
-        "- If a candidate dataframe has extra columns, project it to the requested final columns before `FINAL_TABLE_JSON` or `Answer`.",
-    ]
-    if question_type == "single_value":
-        lines.append("- For count/average/sum/ratio questions, submit one row with one value column.")
-    elif question_type == "row_list":
-        lines.append("- For list/which/state questions, include every matching final row; never use only `.iloc[0]`/`values[0]` if multiple rows match.")
-    if _recent_step_has_final_candidate(state):
-        lines.append("- A recent step produced a final-candidate marker; answer now unless you need one compact correction to remove extra columns or restore missing rows.")
-    if hints:
-        lines.append("- Grounding hints:")
-        lines.extend(f"  - {hint}" for hint in hints)
-    return "\n".join(lines)
+    difficulty = task.difficulty.casefold()
+    if difficulty == "easy":
+        return "\n".join(
+            [
+                "FINAL ANSWER REMINDER (easy):",
+                f"- Question: {task.question}",
+                "- Submit only the columns directly requested by the question.",
+                "- If multiple rows match the entity/filter, include all final rows; do not keep only the first row.",
+                "- Remove helper/debug/join-key/source columns unless the question asks for them.",
+                "- For similar fields such as rank/position, number/id, or date/datetime, verify the field meaning in the data before submitting.",
+            ]
+        )
+
+    if difficulty == "medium":
+        lines = [
+            "FINAL ANSWER REMINDER (medium):",
+            f"- Question: {task.question}",
+            "- Keep the final answer shape tied to the question, not to intermediate helper dataframes.",
+            "- Submit only requested result columns; remove join keys, filters, debug columns, and explanation columns.",
+            "- If a join/filter leaves too few or zero rows, verify key normalization and whether another table/file contains the matching entity.",
+        ]
+        if _question_requests_multiple_metrics(task.question):
+            lines.append(
+                "- The question asks for multiple metrics; return one result column per requested metric rather than collapsing to one value."
+            )
+            lines.append(
+                "- For separate aggregates such as AVG(A), AVG(B), preserve per-column null semantics instead of filtering all metrics by one column's nulls."
+            )
+        elif _question_is_single_value(task.question):
+            lines.append("- The question appears to ask for one metric; return one row with one value column.")
+        elif _question_expects_nonempty_rows(task.question):
+            lines.append("- The question appears to ask for rows; include every supported matching row.")
+        return "\n".join(lines)
+
+    return None
 
 
 def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, object] | None:
@@ -1834,15 +1816,15 @@ class ReActAgent:
                     ),
                 )
             )
-        if runtime_instruction:
-            messages.append(ModelMessage(role="user", content=runtime_instruction))
-        final_answer_contract = (
-            _build_final_answer_contract(task, state)
+        final_answer_reminder = (
+            _build_difficulty_final_answer_reminder(task, state)
             if is_codeact
             else None
         )
-        if final_answer_contract:
-            messages.append(ModelMessage(role="user", content=final_answer_contract))
+        if final_answer_reminder:
+            messages.append(ModelMessage(role="user", content=final_answer_reminder))
+        if runtime_instruction:
+            messages.append(ModelMessage(role="user", content=runtime_instruction))
         return messages
 
     def _build_runtime_instruction(
