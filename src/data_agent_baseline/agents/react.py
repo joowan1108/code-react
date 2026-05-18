@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -1004,7 +1005,12 @@ def _task_uses_planning(task: PublicTask) -> bool:
 
 def _task_has_markdown(task: PublicTask) -> bool:
     try:
-        return any(task.context_dir.rglob("*.md"))
+        if any(task.context_dir.glob("*.md")):
+            return True
+        for child in task.context_dir.iterdir():
+            if child.is_dir() and any(child.glob("*.md")):
+                return True
+        return False
     except Exception:  # noqa: BLE001
         return False
 
@@ -1057,6 +1063,175 @@ def _step_text_for_planning(step: StepRecord) -> str:
         if error:
             parts.append(str(error)[:600])
     return "\n".join(parts).lower()
+
+
+def _successful_python_steps(state: AgentRuntimeState) -> list[StepRecord]:
+    return [step for step in state.steps if step.action == "execute_python" and step.ok]
+
+
+def _normalize_for_fingerprint(text: str) -> str:
+    normalized = re.sub(r"#.*", "", text)
+    normalized = re.sub(r"\s+", " ", normalized).strip().casefold()
+    return normalized[:4000]
+
+
+def _fingerprint_text(text: str) -> str:
+    return hashlib.md5(_normalize_for_fingerprint(text).encode("utf-8")).hexdigest()[:10]
+
+
+def _step_code_text(step: StepRecord) -> str:
+    if isinstance(step.action_input, dict):
+        return str(step.action_input.get("code") or "")
+    return ""
+
+
+def _step_output_text(step: StepRecord) -> str:
+    content = step.observation.get("content")
+    if isinstance(content, dict):
+        return "\n".join(
+            str(content.get(key) or "")
+            for key in ("output", "stdout", "stderr", "traceback")
+            if content.get(key)
+        )
+    error = step.observation.get("error")
+    return str(error or "")
+
+
+def _loop_guard_summary(state: AgentRuntimeState) -> dict[str, object]:
+    python_steps = _successful_python_steps(state)
+    if len(python_steps) < 2:
+        return {"triggered": False}
+
+    last_step = python_steps[-1]
+    last_code = _step_code_text(last_step)
+    last_output = _step_output_text(last_step)
+    code_fingerprint = _fingerprint_text(last_code) if last_code else ""
+    output_fingerprint = _fingerprint_text(last_output) if last_output else ""
+
+    code_repeat_count = (
+        sum(1 for step in python_steps if _fingerprint_text(_step_code_text(step)) == code_fingerprint)
+        if code_fingerprint
+        else 0
+    )
+    output_repeat_count = (
+        sum(1 for step in python_steps if _fingerprint_text(_step_output_text(step)) == output_fingerprint)
+        if output_fingerprint
+        else 0
+    )
+
+    repeated_schema_search = False
+    recent_text = "\n".join(_step_text_for_planning(step) for step in python_steps[-4:])
+    if len(python_steps) >= 4:
+        repeated_schema_search = any(
+            recent_text.count(phrase) >= 2
+            for phrase in (
+                "no explicit format",
+                "no tables",
+                "potential legality tables: []",
+                "format/legality/commander columns: []",
+            )
+        ) or any(
+            len(re.findall(pattern, recent_text)) >= 2
+            for pattern in (
+                r"searching for [a-z0-9_\-\s]{0,40}normal range definition",
+                r"searching for [a-z0-9_\-\s]{0,40}threshold",
+            )
+        )
+
+    triggered = code_repeat_count >= 2 or output_repeat_count >= 2 or repeated_schema_search
+    summary: dict[str, object] = {
+        "triggered": triggered,
+        "last_step_index": last_step.step_index,
+        "code_repeat_count": code_repeat_count,
+        "output_repeat_count": output_repeat_count,
+        "repeated_schema_search": repeated_schema_search,
+    }
+    if triggered:
+        summary["guidance"] = (
+            "Do not rerun the same code, schema inspection, or search. Change tactic: "
+            "use a different source/parser, convert markdown prose into records, or make "
+            "one final best-supported computation if the blocker has already been observed."
+        )
+    return summary
+
+
+def _evidence_requirement_status(all_text: str, keywords: tuple[str, ...]) -> str:
+    return "maybe_found" if any(keyword in all_text for keyword in keywords) else "needs_evidence"
+
+
+def _task_evidence_ledger(task: PublicTask, state: AgentRuntimeState) -> list[dict[str, object]]:
+    question = task.question.casefold()
+    tokens = _split_identifier_tokens(task.question)
+    all_text = "\n".join(_step_text_for_planning(step) for step in state.steps)
+    requirements: list[tuple[str, str, tuple[str, ...]]] = [
+        (
+            "concrete_data_source",
+            "Identify the actual file/table/markdown record source for every requested concept; do not rely on schema-only assumptions.",
+            ("columns", "tables", "files in directory", "link result", "json/", "csv/", "db/", "doc/"),
+        ),
+        (
+            "final_answer_shape",
+            "Know the exact final columns and whether the answer is one value, rows, count, percentage, or ratio.",
+            ("final_table_json", "answer_candidate", "final answer", "columns", "row_count"),
+        ),
+    ]
+    if tokens & {"percentage", "percent", "ratio", "proportion"} or "how many times" in question:
+        requirements.append(
+            (
+                "numerator_denominator",
+                "Define the numerator and denominator from grounded records before computing the percentage/ratio.",
+                ("numerator", "denominator", "percentage", "ratio", "total count", "count of"),
+            )
+        )
+    if "between" in tokens or re.search(r"\b\d+(?:\.\d+)?\s*(?:to|-)\s*\d+(?:\.\d+)?\b", question):
+        requirements.append(
+            (
+                "numeric_boundaries",
+                "Map numeric bounds to a real column and apply inclusive/exclusive semantics from the question.",
+                ("between", ">=", "<=", "numeric_filters", "height", "age", "boundary"),
+            )
+        )
+    if tokens & {"abnormal", "normal", "threshold", "range", "severe", "legal", "status"}:
+        requirements.append(
+            (
+                "rule_or_threshold",
+                "Find the concrete rule, coded value, threshold, or status definition in data/markdown before filtering.",
+                ("threshold", "normal range", "upper limit", "abnormal", "legal status", "coded", "severity"),
+            )
+        )
+    if tokens & {"age", "under", "yet"} or "70" in question:
+        requirements.append(
+            (
+                "age_reference",
+                "Ground age logic in patient birth/date records and the question's reference date, not a guessed current date.",
+                ("birthday", "birth", "age", "70", "years old", "not yet"),
+            )
+        )
+    if tokens & {"format", "commander", "legal", "status"}:
+        requirements.append(
+            (
+                "format_status_source",
+                "If format/status columns are absent from SQLite/CSV, treat markdown legality records as the data source and parse card IDs/status.",
+                ("legalities", "format", "commander", "cards_id", "status", "legal"),
+            )
+        )
+    if _task_has_markdown(task):
+        requirements.append(
+            (
+                "markdown_record_strategy",
+                "For facts stored only in .md, parse record-level snippets and keep IDs/values from the same record together.",
+                ("extract_markdown_records", "search_markdown", "doc/", "snippet", "record", "paragraph"),
+            )
+        )
+
+    return [
+        {
+            "id": requirement_id,
+            "status": _evidence_requirement_status(all_text, keywords),
+            "instruction": instruction,
+        }
+        for requirement_id, instruction, keywords in requirements
+    ]
 
 
 def _recent_result_signal(state: AgentRuntimeState) -> bool:
@@ -1325,6 +1500,8 @@ def _build_planning_context(
         return None, None
 
     difficulty = task.difficulty.casefold()
+    evidence_ledger = _task_evidence_ledger(task, state)
+    loop_guard = _loop_guard_summary(state)
     answer_urgent = _should_prioritize_answer_submission(
         task,
         state,
@@ -1368,6 +1545,18 @@ def _build_planning_context(
                 f"- {node['id']} deps=[{dependencies}] status={node['status']}: "
                 f"{node['instruction']}"
             )
+        lines.append("Evidence checklist:")
+        for evidence in evidence_ledger:
+            lines.append(
+                f"- {evidence['id']} status={evidence['status']}: "
+                f"{evidence['instruction']}"
+            )
+        if loop_guard.get("triggered"):
+            lines.append(
+                "LOOP GUARD: the recent execution pattern repeated code, repeated output, "
+                "or repeated failed schema/search evidence. Do not repeat the same search; "
+                "change parser/source or make one final supported computation."
+            )
         lines.append(
             "Priority: verify real tables/columns for requested concepts, decide the exact final "
             "answer columns, then compute and submit with no helper columns. Do not follow the "
@@ -1397,6 +1586,8 @@ def _build_planning_context(
             "model_input_position": "front_after_system_before_task_prompt",
             "current_focus": current_focus,
             "observed_nodes": observed_nodes,
+            "evidence_ledger": evidence_ledger,
+            "loop_guard": loop_guard,
             "nodes": node_records,
             "prompt_prefix": prompt_prefix,
         }
@@ -1425,6 +1616,18 @@ def _build_planning_context(
         lines.append(
             f"- {node['id']} deps=[{dependencies}] status={node['status']}: "
             f"{node['instruction']}"
+        )
+    lines.append("Evidence checklist:")
+    for evidence in evidence_ledger:
+        lines.append(
+            f"- {evidence['id']} status={evidence['status']}: "
+            f"{evidence['instruction']}"
+        )
+    if loop_guard.get("triggered"):
+        lines.append(
+            "LOOP GUARD: the recent execution pattern repeated code, repeated output, "
+            "or repeated failed schema/search evidence. Do not repeat the same search; "
+            "change parser/source or make one final supported computation."
         )
     lines.append(
         "Priority: first link schema and decide exact final columns; then map "
@@ -1464,6 +1667,8 @@ def _build_planning_context(
         "model_input_position": "front_after_system_before_task_prompt",
         "current_focus": current_focus,
         "observed_nodes": observed_nodes,
+        "evidence_ledger": evidence_ledger,
+        "loop_guard": loop_guard,
         "nodes": node_records,
         "prompt_prefix": prompt_prefix,
     }
@@ -1583,6 +1788,27 @@ class ReActAgent:
                 "Runtime recovery: your previous response could not be parsed. "
                 "Do not repeat Thought-only text or <think> tags. Return exactly one valid step: "
                 "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
+            )
+        loop_guard = _loop_guard_summary(state)
+        if loop_guard.get("triggered"):
+            missing_evidence = [
+                str(item["id"])
+                for item in _task_evidence_ledger(task, state)
+                if item.get("status") == "needs_evidence"
+            ][:4]
+            repeated_bits = [
+                f"code_repeat_count={loop_guard.get('code_repeat_count')}",
+                f"output_repeat_count={loop_guard.get('output_repeat_count')}",
+            ]
+            if loop_guard.get("repeated_schema_search"):
+                repeated_bits.append("repeated_schema_or_search=True")
+            instructions.append(
+                "Loop guard: recent steps repeated the same code, same output, or the same failed "
+                f"schema/search conclusion ({', '.join(repeated_bits)}). "
+                "Do not rerun the same schema inspection, markdown search, or parser. "
+                "Change tactic now: use a different source/parser, parse markdown into record-level rows, "
+                "or make one final best-supported computation if the blocker has already been observed. "
+                f"Still-needed evidence: {missing_evidence or ['none obvious']}."
             )
         if _should_require_link_question_to_data(task, state):
             instructions.append(

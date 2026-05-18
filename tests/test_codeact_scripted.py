@@ -779,6 +779,95 @@ def test_hard_rule_task_gets_conservative_knowledge_reminder() -> None:
         assert "retrieve_knowledge(top_k=2, max_chars=500)" in prompt
 
 
+def test_planning_snapshot_includes_evidence_ledger() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "knowledge.md").write_text(
+            "Legal status in Commander format is stored in markdown records.",
+            encoding="utf-8",
+        )
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_evidence",
+                difficulty="hard",
+                question="What percentage of cards with format commander and legal status do not have a content warning?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            AgentRuntimeState(),
+            None,
+            step_index=1,
+            max_steps=16,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        evidence_ids = {item["id"] for item in planning_snapshot["evidence_ledger"]}
+        assert {"concrete_data_source", "numerator_denominator", "format_status_source"} <= evidence_ids
+        assert "Evidence checklist:" in planning_instruction
+
+
+def test_loop_guard_warns_after_repeated_python_execution() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_loop",
+                difficulty="hard",
+                question="What percentage of rows match the condition?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        for index in (1, 2):
+            state.steps.append(
+                StepRecord(
+                    step_index=index,
+                    thought="Inspect schema again.",
+                    action="execute_python",
+                    action_input={"code": "print('Tables: []')"},
+                    raw_response="Thought: inspect\nCode:\n```python\nprint('Tables: []')\n```",
+                    observation={
+                        "ok": True,
+                        "tool": "execute_python",
+                        "content": {"output": "Tables: []", "stderr": ""},
+                    },
+                    ok=True,
+                )
+            )
+        agent = ReActAgent(
+            model=ScriptedModelAdapter([]),
+            tools=ToolRegistry(specs={}, handlers={}),
+            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
+        )
+
+        planning_instruction, planning_snapshot = _build_planning_context(
+            task,
+            state,
+            None,
+            step_index=3,
+            max_steps=16,
+        )
+        runtime_instruction = agent._build_runtime_instruction(
+            task=task,
+            step_index=3,
+            state=state,
+            fallback_answer=None,
+            consecutive_parse_errors=0,
+        )
+
+        assert planning_instruction is not None
+        assert planning_snapshot is not None
+        assert planning_snapshot["loop_guard"]["triggered"] is True
+        assert "LOOP GUARD" in planning_instruction
+        assert runtime_instruction is not None
+        assert "Loop guard:" in runtime_instruction
+        assert "Do not rerun the same" in runtime_instruction
+
+
 def test_knowledge_reminder_skips_quoted_value_lookup() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
