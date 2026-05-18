@@ -791,6 +791,83 @@ def _final_answer_check(task: PublicTask, answer: AnswerTable) -> dict[str, obje
     }
 
 
+def _recent_step_has_final_candidate(state: AgentRuntimeState) -> bool:
+    for step in state.steps[-2:]:
+        content = step.observation.get("content")
+        if not isinstance(content, dict):
+            continue
+        output = str(content.get("output") or content.get("stdout") or "")
+        if any(marker.casefold() in output.casefold() for marker in FINAL_RESULT_MARKERS):
+            return True
+    return False
+
+
+def _likely_final_output_hints(question: str) -> list[str]:
+    lowered = question.casefold()
+    tokens = _split_identifier_tokens(question)
+    hints: list[str] = []
+
+    def add(hint: str) -> None:
+        if hint not in hints:
+            hints.append(hint)
+
+    if _question_is_single_value(question):
+        add("single value: submit exactly one row and one value column")
+    elif _question_expects_nonempty_rows(question):
+        add("row list: include every matching row, not just the first match")
+
+    if re.search(r"\bstate the date\b|\bwhat date\b|\bwhich date\b", lowered):
+        add("requested output looks like date only; exclude amount/source/debug columns unless asked")
+    if "finish time" in lowered:
+        add("requested output looks like time only")
+    if re.search(r"\bnumber of the driver\b|\bdriver number\b|\bhis number\b|\bher number\b", lowered):
+        add("requested output is a driver/person number; if multiple tables have number, verify the entity table too")
+    if re.search(r"\bwhich race\b|\bwhat race\b", lowered):
+        add("requested output looks like race name/title only")
+    if re.search(r"\bcountries\b|\bcountry\b", lowered):
+        add("requested output looks like country only")
+    if "ranked" in tokens:
+        add("word 'ranked' should check a rank column before substituting position/order")
+    if tokens & {"finished", "finish", "position", "place"}:
+        add("finish/position wording should verify position/positionOrder semantics")
+    if "per unit" in lowered:
+        add("per-unit wording usually requires total price divided by amount/quantity, not total price alone")
+    if "average monthly" in lowered or "monthly average" in lowered:
+        add("average monthly wording may require annual total divided by 12; verify the metric definition")
+    if tokens & {"transaction", "transactions", "withdrawal", "withdrawals", "record", "records"}:
+        add("when listing records without named attributes, prefer stable ID columns over all debug columns")
+    if re.search(r"\ball\b|\blist\b|\blist all\b", lowered):
+        add("all/list wording: do not collapse multiple matching rows into one row")
+
+    return hints[:6]
+
+
+def _build_final_answer_contract(task: PublicTask, state: AgentRuntimeState) -> str | None:
+    if not state.steps:
+        return None
+
+    question_type = _likely_question_type(task.question)
+    hints = _likely_final_output_hints(task.question)
+    lines = [
+        "FINAL ANSWER CONTRACT:",
+        f"- Original question: {task.question}",
+        f"- Expected answer type: {question_type}.",
+        "- Submit only columns directly requested by the question.",
+        "- Do not carry over helper, join-key, filter, sort, debug, source, or verification columns unless the question asks for them.",
+        "- If a candidate dataframe has extra columns, project it to the requested final columns before `FINAL_TABLE_JSON` or `Answer`.",
+    ]
+    if question_type == "single_value":
+        lines.append("- For count/average/sum/ratio questions, submit one row with one value column.")
+    elif question_type == "row_list":
+        lines.append("- For list/which/state questions, include every matching final row; never use only `.iloc[0]`/`values[0]` if multiple rows match.")
+    if _recent_step_has_final_candidate(state):
+        lines.append("- A recent step produced a final-candidate marker; answer now unless you need one compact correction to remove extra columns or restore missing rows.")
+    if hints:
+        lines.append("- Grounding hints:")
+        lines.extend(f"  - {hint}" for hint in hints)
+    return "\n".join(lines)
+
+
 def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, object] | None:
     lower_text = text.lower()
     marker_positions = [
@@ -1759,6 +1836,13 @@ class ReActAgent:
             )
         if runtime_instruction:
             messages.append(ModelMessage(role="user", content=runtime_instruction))
+        final_answer_contract = (
+            _build_final_answer_contract(task, state)
+            if is_codeact
+            else None
+        )
+        if final_answer_contract:
+            messages.append(ModelMessage(role="user", content=final_answer_contract))
         return messages
 
     def _build_runtime_instruction(
