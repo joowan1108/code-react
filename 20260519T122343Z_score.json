@@ -1,0 +1,63 @@
+﻿{
+  "run_dir": "C:\\Users\\joowa\\OneDrive\\바탕 화면\\exec_react\\kddcup2026-data-agents-starter-kit\\artifacts\\runs\\20260519T122343Z",
+  "gold_root": "C:\\Users\\joowa\\OneDrive\\바탕 화면\\exec_react\\kddcup2026-data-agents-starter-kit\\data\\public\\output",
+  "input_root": "C:\\Users\\joowa\\OneDrive\\바탕 화면\\exec_react\\kddcup2026-data-agents-starter-kit\\data\\public\\input",
+  "penalty_lambda_assumption": 0.1,
+  "task_count": 50,
+  "prediction_count": 47,
+  "gold_count": 50,
+  "total_score": 0.74,
+  "perfect_score_count": 37
+}
+
+Task scores:
+{"task_id": "task_11", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 3, "gold_columns": 3, "notes": []}
+{"task_id": "task_145", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_163", "score": 0.0, "recall": 0.0, "extra_columns": 2, "matched_gold_columns": 0, "gold_columns": 2, "notes": ["extra_columns_present"]}
+{"task_id": "task_169", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_173", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_180", "score": 0.0, "recall": 0.0, "extra_columns": 2, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_19", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 2, "gold_columns": 2, "notes": []}
+{"task_id": "task_194", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_196", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_199", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 2, "gold_columns": 2, "notes": []}
+{"task_id": "task_200", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_214", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_218", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_22", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_24", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_243", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_249", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 2, "gold_columns": 2, "notes": []}
+{"task_id": "task_25", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_250", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_257", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 2, "gold_columns": 2, "notes": []}
+{"task_id": "task_259", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_26", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_261", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_269", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_27", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 3, "gold_columns": 3, "notes": ["name_pair_match_used"]}
+{"task_id": "task_283", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_287", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_292", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_303", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_305", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_330", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 2, "gold_columns": 2, "notes": []}
+{"task_id": "task_344", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_349", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_350", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_352", "score": 0.0, "recall": 0.0, "extra_columns": 0, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["missing_prediction"]}
+{"task_id": "task_355", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 3, "gold_columns": 3, "notes": ["name_pair_match_used"]}
+{"task_id": "task_379", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_38", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_396", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_408", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_415", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 2, "gold_columns": 2, "notes": []}
+{"task_id": "task_418", "score": 0.0, "recall": 0.0, "extra_columns": 0, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["missing_prediction"]}
+{"task_id": "task_420", "score": 0.0, "recall": 0.0, "extra_columns": 0, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["missing_prediction"]}
+{"task_id": "task_64", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_67", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_74", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_75", "score": 1.0, "recall": 1.0, "extra_columns": 0, "matched_gold_columns": 1, "gold_columns": 1, "notes": []}
+{"task_id": "task_80", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_86", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}
+{"task_id": "task_89", "score": 0.0, "recall": 0.0, "extra_columns": 1, "matched_gold_columns": 0, "gold_columns": 1, "notes": ["extra_columns_present"]}

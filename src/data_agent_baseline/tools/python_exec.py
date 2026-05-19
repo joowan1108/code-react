@@ -307,13 +307,9 @@ MARKDOWN_ENTITY_TABLE_FIELDS = {
     "got",
     "gpt",
     "height_cm",
-    "id",
     "ldh",
-    "name",
-    "full_name",
     "patient_id",
     "publisher_id",
-    "record_ids",
     "record_year",
     "sex",
     "t_bil",
@@ -1574,26 +1570,11 @@ def _join_candidates_from_id_sets(id_value_sets: dict[str, set[str]], *, max_can
 
 def _question_prefers_markdown_entity_table(question: str) -> bool:
     tokens = _linking_tokens(question)
-    positive = bool(
-        tokens
-        & (
-            MARKDOWN_ENTITY_TABLE_TRIGGER_TERMS
-            | ID_COLUMN_TERMS
-            | NUMERIC_LINKING_TERMS
-            | ROW_MATCH_GENERIC_TOKENS
-            | {
-                "card",
-                "cards",
-                "format",
-                "legal",
-                "legality",
-                "publisher",
-                "record",
-                "records",
-            }
-        )
-    )
+    positive = bool(tokens & MARKDOWN_ENTITY_TABLE_TRIGGER_TERMS)
+    negative = bool(tokens & MARKDOWN_ENTITY_TABLE_AVOID_TERMS)
     if not positive:
+        return False
+    if negative and not (tokens & {"height", "publisher", "creatinine", "birth", "birthday", "age"}):
         return False
     return True
 
@@ -1602,6 +1583,8 @@ def _markdown_entity_table_is_relevant(
     question: str,
     parsed_table: dict[str, object],
 ) -> bool:
+    if not _question_prefers_markdown_entity_table(question):
+        return False
     field_coverage = parsed_table.get("field_coverage")
     if not isinstance(field_coverage, dict):
         return False
@@ -1610,8 +1593,6 @@ def _markdown_entity_table_is_relevant(
         return False
     fields = {str(field) for field, count in field_coverage.items() if int(count or 0) > 0}
     if not fields & MARKDOWN_ENTITY_TABLE_FIELDS:
-        return False
-    if fields <= {"record_ids"}:
         return False
 
     question_tokens = _linking_tokens(question)
@@ -1622,7 +1603,9 @@ def _markdown_entity_table_is_relevant(
     }
     if question_tokens & field_tokens:
         return True
-    if _question_prefers_markdown_entity_table(question) and fields & {"id", "record_ids", "cards_id"}:
+    if question_tokens & {"hero", "heroes", "superhero", "superheroes"} and fields & {"id", "height_cm", "publisher_id"}:
+        return True
+    if question_tokens & {"patient", "patients"} and fields & {"patient_id", "birth_year", "creatinine"}:
         return True
     return False
 
