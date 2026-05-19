@@ -594,6 +594,66 @@ def _remove_high_confidence_extra_columns(task: PublicTask, answer: AnswerTable)
     return answer
 
 
+def _answer_columns_match_explicit_request(task: PublicTask, answer: AnswerTable) -> bool:
+    explicit_indexes = _explicit_requested_column_indexes(task, answer)
+    if explicit_indexes is None:
+        return False
+    return sorted(explicit_indexes) == list(range(len(answer.columns)))
+
+
+def _question_has_multi_column_output_cue(question: str) -> bool:
+    q = f" {question.casefold()} "
+    return any(
+        cue in q
+        for cue in (
+            " and include ",
+            " along with ",
+            " include ",
+            " with their ",
+            " with its ",
+            " give their ",
+            " give its ",
+            " please give ",
+            " list their ",
+        )
+    )
+
+
+def _task_is_easy(task: PublicTask) -> bool:
+    return task.difficulty.casefold() == "easy"
+
+
+def _easy_answer_needs_final_column_review(task: PublicTask, answer: AnswerTable) -> bool:
+    if not _task_is_easy(task) or len(answer.columns) <= 1:
+        return False
+    if _answer_columns_match_explicit_request(task, answer):
+        return False
+    if _question_has_multi_column_output_cue(task.question):
+        return False
+    if _answer_projection_preview(task, answer) is not None:
+        return True
+    check = _final_answer_check(task, answer)
+    if check.get("warnings"):
+        return True
+    return _question_expects_nonempty_rows(task.question) and len(answer.columns) >= 3
+
+
+def _final_column_review_payload(task: PublicTask, answer: AnswerTable) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "status": "needs_final_column_review",
+        "reason": "easy_candidate_may_include_unrequested_columns",
+        "candidate_preview": _answer_preview(answer, max_rows=3),
+        "instruction": (
+            "Review the original question and submit `Answer` using only columns directly requested. "
+            "Do not rerun broad exploration unless a requested value is missing."
+        ),
+    }
+    projection = _answer_projection_preview(task, answer)
+    if projection is not None:
+        payload["projection_hint"] = projection
+    return payload
+
+
 def _is_missing_answer_cell(value: object) -> bool:
     if value is None:
         return True
@@ -629,8 +689,7 @@ def _drop_incomplete_answer_rows(task: PublicTask, answer: AnswerTable) -> Answe
 
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
     normalized = _normalize_answer_table(answer)
-    complete_rows = _drop_incomplete_answer_rows(task, normalized)
-    return _remove_high_confidence_extra_columns(task, complete_rows)
+    return _drop_incomplete_answer_rows(task, normalized)
 
 
 def _answer_projection_preview(task: PublicTask, answer: AnswerTable) -> dict[str, object] | None:
@@ -866,6 +925,10 @@ def _candidate_decision_from_observation(
     if _question_is_single_value(task.question) and (len(answer.rows) != 1 or len(answer.columns) != 1):
         reasons.append("single_value_question_requires_one_cell_answer")
         hard_reasons.append("single_value_question_requires_one_cell_answer")
+
+    if _easy_answer_needs_final_column_review(task, answer):
+        reasons.append("candidate_may_include_helper_columns")
+        hard_reasons.append("candidate_may_include_helper_columns")
 
     store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
     return CandidateAnswerDecision(
@@ -1306,6 +1369,7 @@ def _answer_is_submission_ready(task: PublicTask, answer: AnswerTable) -> bool:
     return (
         _answer_has_submission_shape(task, answer)
         and not _answer_column_is_semantically_suspicious(task, answer)
+        and not _easy_answer_needs_final_column_review(task, answer)
     )
 
 
@@ -1856,6 +1920,15 @@ class ReActAgent:
                 "Use its `row_ids`, `usable_filter`, `value_matches`, and `join_candidates` to connect question "
                 "mentions or markdown records to actual structured data. You may continue solving in the same script."
             )
+        if fallback_answer is not None and _easy_answer_needs_final_column_review(task, fallback_answer):
+            review_payload = _final_column_review_payload(task, fallback_answer)
+            instructions.append(
+                "Runtime final-column review: a candidate answer exists, but it may include helper/filter "
+                "columns that the easy question did not request. "
+                f"Candidate: {_safe_json_dumps(review_payload['candidate_preview'])}. "
+                "Review the original question and submit `Answer` now using only the columns directly requested. "
+                "Do not run more code unless a requested value is missing."
+            )
         if _should_prioritize_answer_submission(
             task,
             state,
@@ -2022,6 +2095,33 @@ class ReActAgent:
                             action_input=answer.to_dict(),
                             raw_response=model_step.raw_response,
                         )
+                        if (
+                            step_index < self.config.max_steps
+                            and _easy_answer_needs_final_column_review(task, answer)
+                        ):
+                            content = _final_column_review_payload(task, answer)
+                            content["final_answer_check"] = _final_answer_check(task, answer)
+                            observation = {
+                                "ok": False,
+                                "tool": model_step.action,
+                                "content": content,
+                            }
+                            self._append_step(
+                                task,
+                                state,
+                                StepRecord(
+                                    step_index=step_index,
+                                    thought=model_step.thought,
+                                    action=model_step.action,
+                                    action_input=model_step.action_input,
+                                    raw_response=raw_response,
+                                    observation=observation,
+                                    ok=False,
+                                ),
+                            )
+                            if answer.rows:
+                                fallback_answer = answer
+                            continue
 
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 content = dict(tool_result.content)
@@ -2044,6 +2144,11 @@ class ReActAgent:
                 candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
                     content["final_answer_check"] = _final_answer_check(task, candidate_answer)
+                    if _easy_answer_needs_final_column_review(task, candidate_answer):
+                        content["final_column_review"] = _final_column_review_payload(
+                            task,
+                            candidate_answer,
+                        )
                 step_record = StepRecord(
                     step_index=step_index,
                     thought=model_step.thought,
