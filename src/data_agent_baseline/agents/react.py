@@ -689,7 +689,8 @@ def _drop_incomplete_answer_rows(task: PublicTask, answer: AnswerTable) -> Answe
 
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
     normalized = _normalize_answer_table(answer)
-    return _drop_incomplete_answer_rows(task, normalized)
+    complete_rows = _drop_incomplete_answer_rows(task, normalized)
+    return _remove_high_confidence_extra_columns(task, complete_rows)
 
 
 def _answer_projection_preview(task: PublicTask, answer: AnswerTable) -> dict[str, object] | None:

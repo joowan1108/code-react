@@ -12,7 +12,6 @@ from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT, build
 from data_agent_baseline.agents.react import (
     ReActAgent,
     ReActAgentConfig,
-    _answer_projection_preview,
     _build_planning_context,
     _candidate_decision_from_observation,
     _final_answer_check,
@@ -256,7 +255,7 @@ def test_final_answer_check_warns_about_likely_extra_columns() -> None:
         assert "debug_score" in check["warnings"][0]
 
 
-def test_sanitize_answer_preserves_obvious_single_target_columns_for_review() -> None:
+def test_sanitize_answer_projects_obvious_single_target_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -275,14 +274,11 @@ def test_sanitize_answer_preserves_obvious_single_target_columns_for_review() ->
             ),
         )
 
-        assert answer.columns == ["event_name", "cost"]
-        assert answer.rows == [["November Speaker", 6.0], ["October Speaker", 6.0]]
-        preview = _answer_projection_preview(task, answer)
-        assert preview is not None
-        assert preview["projected_columns"] == ["event_name"]
+        assert answer.columns == ["event_name"]
+        assert answer.rows == [["November Speaker"], ["October Speaker"]]
 
 
-def test_sanitize_answer_preserves_comment_columns_for_review() -> None:
+def test_sanitize_answer_projects_comment_text_column() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -301,14 +297,11 @@ def test_sanitize_answer_preserves_comment_columns_for_review() -> None:
             ),
         )
 
-        assert answer.columns == ["Id", "PostId", "Score", "Text"]
-        assert answer.rows == [[90813, 46764, 14, "Welcome to Cross Validated."]]
-        preview = _answer_projection_preview(task, answer)
-        assert preview is not None
-        assert preview["projected_columns"] == ["Text"]
+        assert answer.columns == ["Text"]
+        assert answer.rows == [["Welcome to Cross Validated."]]
 
 
-def test_sanitize_answer_preserves_name_columns_for_review() -> None:
+def test_sanitize_answer_prefers_specific_name_over_full_name() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -327,11 +320,8 @@ def test_sanitize_answer_preserves_name_columns_for_review() -> None:
             ),
         )
 
-        assert answer.columns == ["superhero_name", "full_name"]
-        assert answer.rows == [["Black Flash", "-"], ["Blackwulf", "Lucian"]]
-        preview = _answer_projection_preview(task, answer)
-        assert preview is not None
-        assert preview["projected_columns"] == ["superhero_name"]
+        assert answer.columns == ["superhero_name"]
+        assert answer.rows == [["Black Flash"], ["Blackwulf"]]
 
 
 def test_sanitize_answer_keeps_explicitly_requested_columns() -> None:
