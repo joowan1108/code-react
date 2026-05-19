@@ -121,6 +121,15 @@ MEDIUM_PLANNING_NODES = (
     ),
 )
 
+MEDIUM_SEMANTIC_GUARD_LINES = (
+    "BIRD medium semantic guard:",
+    "- Final columns: infer the requested output columns from the question; remove helper IDs, dates, join keys, and filter columns unless explicitly requested.",
+    "- Row grain: decide what one final row represents before filtering or grouping, such as event type, customer, transaction, station country, or monthly consumption.",
+    "- Formula/unit: for average monthly/yearly, ratio, percentage, proportion, per unit, or total wording, verify the denominator and unit from schema, samples, or knowledge before finalizing.",
+    "- Value/date scope: before returning an empty table, check every plausible date/value source across CSV, JSON wrappers, and SQLite tables.",
+    "- Ambiguous columns: when words like type/category/status/date/id can map to multiple columns, inspect actual values and choose the column whose values answer the question.",
+)
+
 LINKING_TRIGGER_TERMS = {
     "abnormal",
     "classification",
@@ -614,6 +623,10 @@ def _question_has_multi_column_output_cue(question: str) -> bool:
 
 def _task_is_easy(task: PublicTask) -> bool:
     return task.difficulty.casefold() == "easy"
+
+
+def _task_is_medium(task: PublicTask) -> bool:
+    return task.difficulty.casefold() == "medium"
 
 
 def _easy_record_id_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
@@ -1370,6 +1383,29 @@ def _answer_is_submission_ready(task: PublicTask, answer: AnswerTable) -> bool:
     )
 
 
+def _medium_empty_answer_recheck_seen(state: AgentRuntimeState) -> bool:
+    return any(
+        isinstance(step.observation, dict)
+        and bool(step.observation.get("medium_empty_answer_recheck"))
+        for step in state.steps
+    )
+
+
+def _should_block_medium_empty_answer(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    model_step: ModelStep,
+) -> bool:
+    if not _task_is_medium(task) or model_step.action != "answer":
+        return False
+    if _medium_empty_answer_recheck_seen(state):
+        return False
+    if not _question_expects_nonempty_rows(task.question):
+        return False
+    answer = _answer_table_from_payload(model_step.action_input)
+    return answer is not None and not answer.rows
+
+
 def _candidate_answer_from_step(task: PublicTask, step: StepRecord) -> AnswerTable | None:
     if step.action != "execute_python" or not step.ok:
         return None
@@ -1648,6 +1684,7 @@ def _build_planning_context(
                 f"- {node['id']} deps=[{dependencies}] status={node['status']}: "
                 f"{node['instruction']}"
             )
+        lines.extend(MEDIUM_SEMANTIC_GUARD_LINES)
         lines.append(
             "Priority: verify real tables/columns for requested concepts, decide the exact final "
             "answer columns, then compute and submit with no helper columns. Do not follow the "
@@ -1678,6 +1715,7 @@ def _build_planning_context(
             "current_focus": current_focus,
             "observed_nodes": observed_nodes,
             "nodes": node_records,
+            "semantic_guard": list(MEDIUM_SEMANTIC_GUARD_LINES),
             "prompt_prefix": prompt_prefix,
         }
         return prompt_prefix, snapshot
@@ -2083,6 +2121,32 @@ class ReActAgent:
                             action_input=answer.to_dict(),
                             raw_response=model_step.raw_response,
                         )
+
+                if _should_block_medium_empty_answer(task, state, model_step):
+                    observation = {
+                        "ok": False,
+                        "medium_empty_answer_recheck": True,
+                        "error": (
+                            "Medium empty-answer guard: this is a row-returning question, but the "
+                            "answer has zero rows. Before submitting an empty table, run one compact "
+                            "Python check over all plausible CSV/JSON/SQLite date and value sources, "
+                            "including JSON wrappers, then submit the verified result."
+                        ),
+                    }
+                    self._append_step(
+                        task,
+                        state,
+                        StepRecord(
+                            step_index=step_index,
+                            thought=model_step.thought,
+                            action=model_step.action,
+                            action_input=model_step.action_input,
+                            raw_response=raw_response,
+                            observation=observation,
+                            ok=False,
+                        )
+                    )
+                    continue
 
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 content = dict(tool_result.content)
