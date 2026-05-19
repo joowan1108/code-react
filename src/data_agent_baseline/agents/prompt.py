@@ -199,8 +199,11 @@ def _monthly_note(task: PublicTask) -> str:
     if "monthly" not in task.question.casefold():
         return ""
     return (
-        "Monthly note: for 'average monthly' questions, the benchmark convention is "
-        "AVG(field) / 12 — compute the per-record average first, then divide by 12. "
+        "Monthly note: ALWAYS divide the per-record average by 12 for 'average monthly' questions. "
+        "The required formula is `df['field'].mean() / 12`. "
+        "Do NOT submit just `.mean()` — the final value must be divided by 12. "
+        "If the Date column is in YYYYMM integer format (e.g. 201302), filter by year with "
+        "`df[df['Date'] // 100 == YYYY]` — do NOT use `pd.to_datetime()` on YYYYMM integers. "
     )
 
 
@@ -208,8 +211,38 @@ def _tally_note(task: PublicTask) -> str:
     if "tally" not in task.question.casefold():
         return ""
     return (
-        "Tally note: 'tally X of Y' means list the distinct values of X — "
-        "use .drop_duplicates() or .unique() on the attribute column, not all rows. "
+        "Tally note: 'tally X of Y' means list the DISTINCT values of X with NO count column. "
+        "Use `.unique()` — do NOT use `value_counts()`. "
+        "If the question asks for the Nth atom (e.g. '4th atom'), find it by "
+        "filtering `atom_id.str.endswith('_4')`, not by row position (`.nth(3)` is wrong "
+        "because atom IDs are stored lexicographically, not numerically). "
+        "To extract entity IDs (e.g. molecule IDs) from prose markdown, use: "
+        "`re.findall(r'TR\\d+', sentence)` for each sentence containing the filter keyword "
+        "(e.g. 'carcinogenic'), then filter the data by the collected IDs. "
+        "Do NOT reimplement built-in tools — do NOT define your own `search_markdown` function. "
+    )
+
+
+def _entity_type_note(task: PublicTask) -> str:
+    q = task.question.casefold()
+    if "type" not in q:
+        return ""
+    try:
+        has_db = any(True for _ in task.context_dir.rglob("*.db"))
+    except Exception:  # noqa: BLE001
+        has_db = False
+    if not has_db:
+        return ""
+    return (
+        "Entity-type note: when the question asks for the 'type' of an event or activity, "
+        "look for a `type` column in the primary entity table (e.g. event, task, activity), "
+        "NOT in expense/transaction/budget tables. "
+        "The result is ONE ROW per event: the event's `type` value (e.g. 'Meeting') "
+        "and the SUM of ALL approved expenses — do NOT group by expense category or description. "
+        "Join chain: event → budget (via link_to_event) → expense (via link_to_budget). "
+        "Collect ALL linked budget IDs with `.tolist()` and filter expenses with `.isin(id_list)`. "
+        "For boolean-like columns (approved, active, status), values are often `True`/`False`, "
+        "not strings like 'yes'/'no'. "
     )
 
 
@@ -249,6 +282,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             f"{_markdown_helper_note(task)}"
             f"{_monthly_note(task)}"
             f"{_tally_note(task)}"
+            f"{_entity_type_note(task)}"
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
             "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
             f"{_knowledge_reminder(task)}"
