@@ -1337,6 +1337,23 @@ def build_question_data_links(
     }
 
 
+def _natural_sort_key_fn(series: "pd.Series") -> "pd.Series":
+    """Return sort keys for alphanumeric ID columns so TR001_2 < TR001_10."""
+    if not hasattr(series, "dtype") or series.dtype.kind not in ("O", "U", "S"):
+        return series  # already numeric dtype — pandas sorts correctly
+
+    def _key(val: object) -> tuple:
+        try:
+            if pd.isna(val):  # handles float NaN, numpy.float64, pd.NA, pd.NaT, None
+                return (1, "", 0)  # sort NaN last
+        except TypeError:
+            return (1, "", 0)  # pd.NA raises TypeError on bool(pd.NA)
+        parts = re.split(r"(\d+)", str(val))  # re is imported at module level
+        return (0,) + tuple(int(p) if p.isdigit() else p.casefold() for p in parts)
+
+    return series.map(_key)
+
+
 def _run_python_code(
     context_root: str,
     working_dir: str,
@@ -1489,6 +1506,7 @@ def _run_python_code(
         "load_json_table": load_json_table_helper,
         "load_json_df": load_json_table_helper,
         "link_question_to_data": link_question_to_data_helper,
+        "natural_sort_key": _natural_sort_key_fn,
     }
     resolved_stdout_path = Path(stdout_path)
     resolved_stderr_path = Path(stderr_path)

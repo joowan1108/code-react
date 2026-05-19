@@ -82,14 +82,16 @@ PLANNING_NODES = (
     (
         "aggregate_select",
         ("join_filter",),
-        "Compute the requested rows, count, percentage, average, max/min, "
-        "ranking, or ratio.",
+        "Compute the requested rows, count, percentage, average, max/min, ranking, or ratio. "
+        "For 'average per entity' questions, NEVER apply .mean() directly to raw rows. "
+        "Step 1: groupby entity & sum/mean. Step 2: average the results.",
     ),
     (
         "final_verify",
         ("aggregate_select",),
-        "Verify ties/all rows/distinctness/units and prepare exactly the final "
-        "requested columns.",
+        "Verify ties/all rows/distinctness/units and prepare exactly the final requested columns. "
+        "For 'how many X' questions, always use .nunique() or COUNT(DISTINCT X) to count distinct "
+        "entities unless row-level count is explicitly specified.",
     ),
     (
         "answer_submission",
@@ -665,8 +667,20 @@ def _python_repair_hints(content: dict[str, object], code: str) -> list[str]:
         add("Result is empty; verify filters, join keys, casing, and whether the entity should be matched in another table/document.")
     if "final_table_json" in code.casefold() and not bool(content.get("success")):
         add("Do not print FINAL_TABLE_JSON until the code has computed the exact final answer without errors.")
+    if (
+        "natural_sort_key" not in code
+        and re.search(
+            r"sort_values\s*\([^)]*['\"]?\w*(id|code|ref|key|num|atom)\w*['\"]?",
+            code,
+            re.IGNORECASE,
+        )
+    ):
+        add(
+            "Alphanumeric ID columns (e.g. atom_id, TR001_10) sort lexicographically by default; "
+            "use `sort_values(col, key=natural_sort_key)` for correct numeric order."
+        )
 
-    return hints[:4]
+    return hints[:5]
 
 
 def _likely_question_type(question: str) -> str:

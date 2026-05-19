@@ -44,6 +44,7 @@ Operational rules:
 14. For JSON files, prefer direct `load_json_table("json/name.json")` or `load_json_records("json/name.json")` calls; these helpers unwrap common `{table, records}` JSON wrappers.
 15. Use direct markdown helper calls only as a fallback when structured files do not contain the requested rule, linked prose record, threshold, or coded meaning.
 16. If you are unsure how a question mention, markdown record ID, or quoted value connects to structured columns, call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates instead of guessing.
+17. For columns containing alphanumeric IDs with numeric suffixes (e.g. TR001_2, TR001_10, atom_3, ref_12), use `sort_values(col, key=natural_sort_key)` instead of plain `sort_values(col)` to avoid lexicographic misordering (TR001_10 sorts before TR001_2 in default string sort).
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
