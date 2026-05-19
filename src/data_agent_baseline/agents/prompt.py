@@ -254,8 +254,10 @@ def _markdown_helper_note(task: PublicTask) -> str:
             "Use markdown helpers only after checking structured data. If document markdown appears to store "
             "row-like records with repeated IDs, codes, headings, tables, or key-value fields, use "
             "`pd.DataFrame(markdown_entity_table())`; use `markdown_entity_table(include_metadata=True)` only "
-            "to inspect field_coverage/source_paths, not as direct DataFrame input. For compact rule or status "
-            "blocks, prefer `extract_markdown_records([...])` or `search_markdown([...])`. "
+            "to inspect field_coverage/source_paths, not as direct DataFrame input. Prefer this helper before "
+            "custom regex parsing of repeated prose records, because it merges repeated ID blocks and corrected "
+            "values. For compact rule or status blocks, prefer `extract_markdown_records([...])` or "
+            "`search_markdown([...])`. "
         )
     return (
         "Use markdown helpers only after checking structured data. If a needed value, rule, or link is only "

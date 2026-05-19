@@ -762,7 +762,7 @@ def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable
 
 def _answer_projection_preview(task: PublicTask, answer: AnswerTable) -> dict[str, object] | None:
     normalized = _normalize_answer_table(answer)
-    projected = _remove_high_confidence_extra_columns(task, normalized)
+    projected = _sanitize_answer_table(task, normalized)
     if projected.columns == normalized.columns:
         return None
     return {
@@ -951,6 +951,8 @@ def _build_difficulty_final_answer_reminder(task: PublicTask, state: AgentRuntim
             "- If multiple rows match the entity/filter, include all final rows; do not keep only the first row.",
             "- Remove helper/debug/join-key/source columns unless the question asks for them.",
             "- For similar fields such as rank/position, number/id, or date/datetime, verify the field meaning in the data before submitting.",
+            "- For rank/order questions, distinguish rank, finishing position, ordering/index, grid/start position, and raw row order using observed columns and samples.",
+            "- For finish/time questions, distinguish elapsed time, gap-to-winner, duration, and status text before choosing the final time column.",
             "- For time-like values, compare normalized formats before submitting when exact formatting differs.",
         ]
     )
