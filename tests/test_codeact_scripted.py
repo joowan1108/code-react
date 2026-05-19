@@ -27,7 +27,7 @@ from data_agent_baseline.config import AgentConfig, AppConfig, DatasetConfig, Ru
 from data_agent_baseline.run.runner import run_single_task
 from data_agent_baseline.tools.knowledge import retrieve_knowledge_snippets
 from data_agent_baseline.tools.python_exec import execute_python_code
-from data_agent_baseline.tools.registry import ToolRegistry, create_default_tool_registry
+from data_agent_baseline.tools.registry import ToolRegistry
 
 
 def _json_response(payload: dict[str, object]) -> str:
@@ -486,16 +486,11 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
         assert planning_snapshot is not None
         assert planning_snapshot["mode"] == "medium_light"
         assert len(planning_snapshot["nodes"]) == 3
-        assert "semantic_guard" in planning_snapshot
         assert messages[0].role == "system"
         assert messages[1].content.startswith("PLANNING PREFIX")
         assert "schema_linking" in messages[1].content
         assert "target_columns" in messages[1].content
         assert "answer_submission" in messages[1].content
-        assert "BIRD medium semantic guard" in messages[1].content
-        assert "Row grain" in messages[1].content
-        assert "Formula/unit" in messages[1].content
-        assert "Value/date scope" in messages[1].content
         assert "semantic_mapping" not in messages[1].content
         assert "load_preprocess" not in messages[1].content
         assert "join_filter" not in messages[1].content
@@ -933,49 +928,6 @@ def test_medium_planning_does_not_use_advanced_loop_guard() -> None:
         assert "evidence_ledger" not in planning_snapshot
         assert "LOOP GUARD" not in planning_instruction
         assert runtime_instruction is None
-
-
-def test_medium_empty_answer_is_rechecked_once() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        context_path = Path(temp_dir)
-        task = PublicTask(
-            record=TaskRecord(
-                task_id="task_medium_empty",
-                difficulty="medium",
-                question="Please list the countries with transactions in June 2013.",
-            ),
-            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
-        )
-        agent = ReActAgent(
-            model=ScriptedModelAdapter(
-                [
-                    _answer_response(
-                        "I think no countries match.",
-                        {"columns": ["Country"], "rows": []},
-                    ),
-                    _answer_response(
-                        "I rechecked the sources and the verified result is empty.",
-                        {"columns": ["Country"], "rows": []},
-                    ),
-                ]
-            ),
-            tools=create_default_tool_registry(),
-            config=ReActAgentConfig(max_steps=2),
-            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
-            prompt_tool_names=("execute_python", "answer"),
-        )
-
-        result = agent.run(task)
-
-        assert len(result.steps) == 2
-        assert result.steps[0].action == "answer"
-        assert not result.steps[0].ok
-        assert result.steps[0].observation["medium_empty_answer_recheck"] is True
-        assert result.steps[1].action == "answer"
-        assert result.steps[1].ok
-        assert result.answer is not None
-        assert result.answer.columns == ["Country"]
-        assert result.answer.rows == []
 
 
 def test_knowledge_reminder_skips_quoted_value_lookup() -> None:

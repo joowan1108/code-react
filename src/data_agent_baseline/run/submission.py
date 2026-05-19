@@ -58,7 +58,7 @@ def build_submission_config(
             model=model_name,
             api_base=api_base,
             api_key=api_key,
-            max_steps=_env_int("AGENT_MAX_STEPS", 10),
+            max_steps=_env_int("AGENT_MAX_STEPS", 16),
             temperature=_env_float("AGENT_TEMPERATURE", 0.0),
             model_timeout_seconds=_env_float("AGENT_MODEL_TIMEOUT_SECONDS", 90.0),
             max_output_tokens=_env_int("AGENT_MAX_OUTPUT_TOKENS", 2048),
@@ -73,8 +73,8 @@ def build_submission_config(
         run=RunConfig(
             output_dir=scratch_root,
             run_id="submission_run",
-            max_workers=_env_int("AGENT_MAX_WORKERS", 4),
-            task_timeout_seconds=_env_int("AGENT_TASK_TIMEOUT_SECONDS", 300),
+            max_workers=_env_int("AGENT_MAX_WORKERS", 8),
+            task_timeout_seconds=_env_int("AGENT_TASK_TIMEOUT_SECONDS", 600),
         ),
     )
 

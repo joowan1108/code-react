@@ -127,45 +127,6 @@ KNOWLEDGE_TRIGGER_TERMS = {
     "warning",
 }
 
-MARKDOWN_ENTITY_PROMPT_TRIGGER_TERMS = {
-    "age",
-    "alignment",
-    "birth",
-    "birthday",
-    "born",
-    "creatinine",
-    "gender",
-    "height",
-    "hero",
-    "heroes",
-    "patient",
-    "patients",
-    "publisher",
-    "sex",
-    "superhero",
-    "superheroes",
-    "weight",
-}
-
-MARKDOWN_ENTITY_PROMPT_AVOID_TERMS = {
-    "advertisement",
-    "amount",
-    "budget",
-    "budgets",
-    "card",
-    "cards",
-    "commander",
-    "content",
-    "event",
-    "format",
-    "legal",
-    "legality",
-    "meeting",
-    "status",
-    "warning",
-}
-
-
 def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None) -> str:
     base_prompt = system_prompt or REACT_SYSTEM_PROMPT
     examples = CODEACT_RESPONSE_EXAMPLES if base_prompt == CODEACT_REACT_SYSTEM_PROMPT else RESPONSE_EXAMPLES
@@ -233,15 +194,50 @@ def _knowledge_reminder(task: PublicTask) -> str:
     )
 
 
-def _should_prompt_markdown_entity_table(task: PublicTask) -> bool:
-    question_tokens = _tokens(task.question)
-    if not question_tokens & MARKDOWN_ENTITY_PROMPT_TRIGGER_TERMS:
+def _markdown_probe_text(markdown_paths: list[object], *, max_chars: int = 12000) -> str:
+    chunks: list[str] = []
+    remaining = max_chars
+    for path in markdown_paths:
+        if remaining <= 0:
+            break
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        if not text:
+            continue
+        chunk = text[:remaining]
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return "\n".join(chunks)
+
+
+def _markdown_looks_row_like(markdown_paths: list[object]) -> bool:
+    text = _markdown_probe_text(markdown_paths)
+    if not text:
         return False
-    if question_tokens & MARKDOWN_ENTITY_PROMPT_AVOID_TERMS and not (
-        question_tokens & {"age", "birth", "birthday", "creatinine", "height", "publisher"}
-    ):
-        return False
-    return True
+
+    field_line_count = len(
+        re.findall(r"(?m)^\s*(?:[-*]\s*)?[A-Za-z][A-Za-z0-9_ /-]{1,40}\s*:\s*\S", text)
+    )
+    id_like_count = len(
+        re.findall(
+            r"\b(?:id|ids|code|key|record|ref(?:erence)?)\b\s*[:#-]?\s*[A-Za-z0-9_.-]+",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    table_like = bool(re.search(r"(?m)^\s*\|[^|\n]+\|[^|\n]+\|\s*$", text))
+    heading_count = len(re.findall(r"(?m)^\s{0,3}#{1,4}\s+\S", text))
+    numeric_attribute_count = len(
+        re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{2,}\b.{0,24}\b[-+]?\d+(?:\.\d+)?\b", text)
+    )
+
+    if table_like and id_like_count:
+        return True
+    if field_line_count >= 3 and (id_like_count or heading_count >= 2):
+        return True
+    return id_like_count >= 1 and numeric_attribute_count >= 2
 
 
 def _markdown_helper_note(task: PublicTask) -> str:
@@ -252,19 +248,20 @@ def _markdown_helper_note(task: PublicTask) -> str:
     has_document_markdown = any(path.name != "knowledge.md" for path in markdown_paths)
     if not has_document_markdown:
         return ""
-    if _should_prompt_markdown_entity_table(task):
+    document_markdown_paths = [path for path in markdown_paths if path.name != "knowledge.md"]
+    if _markdown_looks_row_like(document_markdown_paths):
         return (
-            "Use markdown helpers only after checking structured data. If document markdown stores repeated "
-            "entity/patient/hero rows with attributes such as height, publisher, birth year, sex, or lab values, "
-            "use `pd.DataFrame(markdown_entity_table())`; use `markdown_entity_table(include_metadata=True)` only "
-            "to inspect field_coverage/source_paths, not as direct DataFrame input. For compact rule/status/budget "
+            "Use markdown helpers only after checking structured data. If document markdown appears to store "
+            "row-like records with repeated IDs, codes, headings, tables, or key-value fields, use "
+            "`pd.DataFrame(markdown_entity_table())`; use `markdown_entity_table(include_metadata=True)` only "
+            "to inspect field_coverage/source_paths, not as direct DataFrame input. For compact rule or status "
             "blocks, prefer `extract_markdown_records([...])` or `search_markdown([...])`. "
         )
     return (
         "Use markdown helpers only after checking structured data. If a needed value, rule, or link is only "
         "inside document markdown, prefer `extract_markdown_records([...])` or `search_markdown([...])` for compact "
-        "blocks. For legal/status/budget/event/card relationships, do not force `markdown_entity_table()` unless "
-        "a quick metadata check shows row-like entity fields that directly match the question. "
+        "blocks. do not force `markdown_entity_table()` unless a quick metadata check shows row-like fields that "
+        "directly match the question. "
     )
 
 
