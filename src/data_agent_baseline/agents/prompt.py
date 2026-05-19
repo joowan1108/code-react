@@ -195,6 +195,24 @@ def _knowledge_reminder(task: PublicTask) -> str:
     )
 
 
+def _monthly_note(task: PublicTask) -> str:
+    if "monthly" not in task.question.casefold():
+        return ""
+    return (
+        "Monthly note: for 'average monthly' questions, the benchmark convention is "
+        "AVG(field) / 12 — compute the per-record average first, then divide by 12. "
+    )
+
+
+def _tally_note(task: PublicTask) -> str:
+    if "tally" not in task.question.casefold():
+        return ""
+    return (
+        "Tally note: 'tally X of Y' means list the distinct values of X — "
+        "use .drop_duplicates() or .unique() on the attribute column, not all rows. "
+    )
+
+
 def _markdown_helper_note(task: PublicTask) -> str:
     try:
         markdown_paths = list(task.context_dir.rglob("*.md"))
@@ -229,6 +247,8 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "For JSON files, prefer direct `load_json_table(\"json/file.json\")` or `load_json_records(\"json/file.json\")` calls "
             "instead of manually guessing whether the payload is a list or a `{table, records}` wrapper. "
             f"{_markdown_helper_note(task)}"
+            f"{_monthly_note(task)}"
+            f"{_tally_note(task)}"
             "If your Python code computes a plausible final table, print `FINAL_TABLE_JSON:` followed by "
             "JSON with `columns` and `rows`; use that marker only for the exact final answer. "
             f"{_knowledge_reminder(task)}"
