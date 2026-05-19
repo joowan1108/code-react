@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import shutil
 import sqlite3
 from dataclasses import dataclass
@@ -46,6 +47,79 @@ def _first_present(record: dict[str, Any], keys: tuple[str, ...]) -> Any:
     for key in keys:
         if key in record and record[key] not in (None, ""):
             return record[key]
+    return None
+
+
+def _normalize_question_for_overlap(value: Any) -> str:
+    text = str(value).casefold()
+    text = text.replace("\u2018", "'").replace("\u2019", "'").replace("`", "'")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _question_tokens(value: Any) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", _normalize_question_for_overlap(value)))
+
+
+def _question_token_overlap(left: Any, right: Any) -> float:
+    left_tokens = _question_tokens(left)
+    right_tokens = _question_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+
+
+def _load_excluded_questions(input_roots: list[Path]) -> dict[str, list[str]]:
+    excluded: dict[str, list[str]] = {}
+    for input_root in input_roots:
+        task_json_paths = [input_root] if input_root.is_file() else sorted(input_root.rglob("task.json"))
+        for task_json_path in task_json_paths:
+            try:
+                payload = _read_json(task_json_path)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict) or "question" not in payload:
+                continue
+            normalized = _normalize_question_for_overlap(payload["question"])
+            if not normalized:
+                continue
+            excluded.setdefault(normalized, []).append(str(task_json_path))
+    return excluded
+
+
+def _question_exclusion_match(
+    question: Any,
+    excluded_questions: dict[str, list[str]],
+    *,
+    near_threshold: float,
+) -> dict[str, Any] | None:
+    normalized = _normalize_question_for_overlap(question)
+    if normalized in excluded_questions:
+        return {
+            "match_type": "exact_question",
+            "overlap": 1.0,
+            "matched_question": normalized,
+            "matched_sources": excluded_questions[normalized],
+        }
+
+    if near_threshold <= 0:
+        return None
+
+    best_question: str | None = None
+    best_overlap = 0.0
+    for candidate in excluded_questions:
+        overlap = _question_token_overlap(normalized, candidate)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_question = candidate
+
+    if best_question is not None and best_overlap >= near_threshold:
+        return {
+            "match_type": "near_question",
+            "overlap": best_overlap,
+            "matched_question": best_question,
+            "matched_sources": excluded_questions[best_question],
+        }
     return None
 
 
@@ -324,9 +398,9 @@ def _write_benchmark_config(args: argparse.Namespace) -> Path | None:
 
     def config_path(path: Path) -> str:
         try:
-            return str(path.relative_to(Path.cwd()))
+            return path.relative_to(Path.cwd()).as_posix()
         except ValueError:
-            return str(path)
+            return path.as_posix()
 
     base_payload.setdefault("dataset", {})
     base_payload["dataset"]["root_path"] = config_path(args.out_root / "input")
@@ -488,6 +562,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None, help="Maximum records to convert.")
     parser.add_argument("--start", type=int, default=0, help="Start index in the split JSON.")
     parser.add_argument(
+        "--exclude-input-root",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "DABench-style input root or task.json file whose questions should be "
+            "excluded from the converted BIRD set. Can be passed more than once."
+        ),
+    )
+    parser.add_argument(
+        "--exclude-near-threshold",
+        type=float,
+        default=0.0,
+        help=(
+            "Also exclude questions whose token overlap with an excluded question "
+            "is at least this value. Use 0 to disable near-duplicate filtering."
+        ),
+    )
+    parser.add_argument(
         "--task-id-offset",
         type=int,
         default=100000,
@@ -553,6 +646,11 @@ def main() -> None:
     args = parse_args()
     args.bird_root = args.bird_root.resolve()
     args.out_root = args.out_root.resolve()
+    args.exclude_input_root = [
+        path.resolve() if path.exists() else path for path in args.exclude_input_root
+    ]
+    if not 0.0 <= args.exclude_near_threshold <= 1.0:
+        raise ValueError("--exclude-near-threshold must be between 0 and 1.")
 
     if args.overwrite and args.out_root.exists():
         shutil.rmtree(args.out_root)
@@ -565,13 +663,34 @@ def main() -> None:
     split_json = _find_split_json(args.bird_root, args.split)
     split_name = Path(args.split).stem if Path(args.split).suffix == ".json" else args.split
     records = _ensure_records(_read_json(split_json), split_json)
-    selected = records[args.start :]
-    if args.limit is not None:
-        selected = selected[: args.limit]
+    excluded_questions = _load_excluded_questions(args.exclude_input_root)
 
     db_cache: dict[str, Path] = {}
     converted: list[ConvertedTask] = []
-    for local_index, record in enumerate(selected, start=args.start):
+    skipped_question_overlaps: list[dict[str, Any]] = []
+    considered_count = 0
+    for local_index, record in enumerate(records[args.start :], start=args.start):
+        if args.limit is not None and len(converted) >= args.limit:
+            break
+        considered_count += 1
+        question = _first_present(record, QUESTION_KEYS)
+        if question is not None and excluded_questions:
+            exclusion_match = _question_exclusion_match(
+                question,
+                excluded_questions,
+                near_threshold=args.exclude_near_threshold,
+            )
+            if exclusion_match is not None:
+                skipped_question_overlaps.append(
+                    {
+                        "record_index": local_index,
+                        "source_question_id": _first_present(record, QUESTION_ID_KEYS),
+                        "db_id": _first_present(record, DB_ID_KEYS),
+                        "question": str(question),
+                        **exclusion_match,
+                    }
+                )
+                continue
         task = _convert_record(
             record,
             index=local_index,
@@ -587,7 +706,13 @@ def main() -> None:
         "split_json": str(split_json),
         "record_start": args.start,
         "requested_limit": args.limit,
+        "considered_count": considered_count,
         "converted_count": len(converted),
+        "exclude_input_roots": [str(path) for path in args.exclude_input_root],
+        "exclude_near_threshold": args.exclude_near_threshold,
+        "excluded_question_count": len(excluded_questions),
+        "skipped_question_overlap_count": len(skipped_question_overlaps),
+        "skipped_question_overlaps": skipped_question_overlaps,
         "input_root": str(args.out_root / "input"),
         "gold_root": str(args.out_root / "output"),
         "tasks": [

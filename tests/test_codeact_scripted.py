@@ -301,6 +301,101 @@ def test_sanitize_answer_projects_comment_text_column() -> None:
         assert answer.rows == [["Welcome to Cross Validated."]]
 
 
+def test_sanitize_answer_projects_single_value_metric_column() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_amount",
+                difficulty="easy",
+                question="What is the amount of the funds that the Vice President received?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["member_id", "first_name", "last_name", "position", "total_amount_received"],
+                rows=[["recD078", "Phillip", "Cullen", "Vice President", 50]],
+            ),
+        )
+
+        assert answer.columns == ["total_amount_received"]
+        assert answer.rows == [[50]]
+
+
+def test_sanitize_answer_keeps_entity_metric_and_currency_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_customer_metric",
+                difficulty="medium",
+                question=(
+                    "Who is the top spending customer and how much is the average price per "
+                    "single item purchased by this customer? What currency was being used?"
+                ),
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["CustomerID", "avg_price_per_item", "Currency"],
+                rows=[["C-001", 9.5, "USD"]],
+            ),
+        )
+
+        assert answer.columns == ["CustomerID", "avg_price_per_item", "Currency"]
+        assert answer.rows == [["C-001", 9.5, "USD"]]
+
+
+def test_sanitize_answer_projects_member_list_to_names() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_members",
+                difficulty="medium",
+                question='List all the members of the "School of Applied Sciences, Technology and Education" department.',
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["member_id", "first_name", "last_name", "email", "position"],
+                rows=[["rec1", "Angela", "Sanders", "a@example.com", "Member"]],
+            ),
+        )
+
+        assert answer.columns == ["first_name", "last_name"]
+        assert answer.rows == [["Angela", "Sanders"]]
+
+
+def test_sanitize_answer_keeps_explicit_member_contact_column() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_member_phone",
+                difficulty="medium",
+                question="List the students in the Chess Club and their phone numbers.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = _sanitize_answer_table(
+            task,
+            AnswerTable(
+                columns=["first_name", "last_name", "phone"],
+                rows=[["Angela", "Sanders", "555-0101"]],
+            ),
+        )
+
+        assert answer.columns == ["first_name", "last_name", "phone"]
+        assert answer.rows == [["Angela", "Sanders", "555-0101"]]
+
+
 def test_sanitize_answer_prefers_specific_name_over_full_name() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)

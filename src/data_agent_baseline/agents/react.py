@@ -130,6 +130,16 @@ MEDIUM_SEMANTIC_GUARD_LINES = (
     "- Ambiguous columns: when words like type/category/status/date/id can map to multiple columns, inspect actual values and choose the column whose values answer the question.",
 )
 
+BIRD_SEMANTIC_CONTRACT_LINES = (
+    "BIRD semantic contract:",
+    "- Before finalizing a calculation, write down the row grain, filters, formula, denominator/unit, and final output shape in the Thought or compact Python prints.",
+    "- Date/month/year mentions must be matched to observed encoded values in the data, such as YYYYMM, YYYY-MM-DD, or separate year/month columns.",
+    "- Percentage, ratio, increase/decrease rate, and how-many-times questions require an explicit numerator and denominator before submission.",
+    "- Average monthly/yearly wording requires checking whether the data is already monthly/yearly or needs unit conversion.",
+    "- Normal/abnormal/range/severe/status wording requires a grounded threshold or coded meaning from data or markdown before filtering.",
+    "- If the final answer has more than 20 rows, do not hand-write the Answer JSON; print `FINAL_TABLE_JSON:` from Python so the runtime can submit it.",
+)
+
 LINKING_TRIGGER_TERMS = {
     "abnormal",
     "classification",
@@ -373,22 +383,42 @@ def _question_is_single_value(question: str) -> bool:
     tokens = _split_identifier_tokens(question)
     if _question_requests_multiple_metrics(question):
         return False
-    if any(phrase in q for phrase in ("how many", "how much", "what percentage", "calculate the percentage")):
-        return True
+
+    row_or_entity_cues = (
+        "list",
+        "identify",
+        "name the",
+        "names of",
+        "full names",
+        "names and",
+        "what are",
+        "which ",
+        "who ",
+        "write ",
+        "give their",
+        "type of",
+        "what currency",
+        "currency was",
+    )
     if any(
         phrase in q
+        for phrase in row_or_entity_cues
+    ):
+        return False
+    if q.count("?") >= 2 and any(
+        phrase in q
         for phrase in (
-            "list",
-            "identify",
-            "name the",
-            "names and",
-            "what are",
+            "what currency",
             "which ",
-            "give their",
-            "type of",
+            "who ",
+            "name ",
+            "id ",
+            "identifier",
         )
     ):
         return False
+    if any(phrase in q for phrase in ("how many", "how much", "what percentage", "calculate the percentage")):
+        return True
     return bool(
         tokens
         & {
@@ -402,6 +432,10 @@ def _question_is_single_value(question: str) -> bool:
             "proportion",
             "total",
             "sum",
+            "amount",
+            "cost",
+            "price",
+            "value",
         }
     ) and "list" not in tokens
 
@@ -490,6 +524,8 @@ def _explicit_requested_column_indexes(task: PublicTask, answer: AnswerTable) ->
         groups.append({"id"})
     if re.search(r"\bsex\b|\bgender\b", question):
         groups.append({"sex", "gender"})
+    if re.search(r"\bbirth(?:day)?\b|\bborn\b", question):
+        groups.append({"birthday", "birth", "date"})
     if re.search(r"\bdisease\b|diagnos", question):
         groups.append({"disease", "diagnosis"})
     if "type of expense" in question or "expense type" in question:
@@ -591,10 +627,115 @@ def _single_target_column_indexes(task: PublicTask, answer: AnswerTable) -> list
     return keep
 
 
+def _single_value_target_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
+    if len(answer.columns) <= 1 or not _question_is_single_value(task.question):
+        return None
+
+    question = task.question.casefold()
+    question_tokens = _split_identifier_tokens(task.question)
+    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
+    target_groups: list[set[str]] = []
+
+    if "source" in question_tokens:
+        target_groups.append({"source"})
+    elif question_tokens & {"percentage", "percent"}:
+        target_groups.append({"percentage", "percent"})
+    elif question_tokens & {"ratio", "proportion"}:
+        target_groups.append({"ratio", "proportion", "rate"})
+    elif "how many times" in question:
+        target_groups.append({"ratio", "times", "fold"})
+    elif question_tokens & {"average", "avg", "mean"}:
+        target_groups.append({"average", "avg", "mean", "consumption", "amount", "score"})
+    elif question_tokens & {"amount", "fund", "funds", "spent", "cost", "budget", "price", "value"}:
+        target_groups.append({"amount", "fund", "funds", "spent", "cost", "budget", "price", "value", "total"})
+    elif question_tokens & {"count", "number"} or "how many" in question:
+        target_groups.append({"count", "number", "num", "total", "n"})
+    elif question_tokens & {"date", "time"}:
+        target_groups.append({"date", "time"})
+    else:
+        return None
+
+    candidate_indexes: list[int] = []
+    for group in target_groups:
+        candidate_indexes.extend(
+            index
+            for index, tokens in enumerate(column_tokens)
+            if tokens & group
+        )
+
+    deduped = sorted(set(candidate_indexes))
+    if len(deduped) != 1:
+        return None
+    return deduped
+
+
+def _member_name_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
+    if len(answer.columns) <= 2 or _question_is_single_value(task.question):
+        return None
+    if _question_has_multi_column_output_cue(task.question):
+        return None
+    question = task.question.casefold()
+    question_tokens = _split_identifier_tokens(task.question)
+    explicit_other_outputs = {
+        "address",
+        "amount",
+        "birthday",
+        "birthdate",
+        "budget",
+        "contact",
+        "cost",
+        "date",
+        "diagnosis",
+        "disease",
+        "email",
+        "fund",
+        "funds",
+        "gender",
+        "id",
+        "identifier",
+        "phone",
+        "position",
+        "price",
+        "role",
+        "sex",
+        "status",
+        "time",
+        "title",
+        "total",
+    }
+    if question_tokens & explicit_other_outputs:
+        return None
+    if not re.search(r"\bmembers?\b|\bstudents?\b|\bpeople\b|\bpersons?\b", question):
+        return None
+
+    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
+    first_indexes = [
+        index
+        for index, tokens in enumerate(column_tokens)
+        if {"first", "name"} <= tokens
+    ]
+    last_indexes = [
+        index
+        for index, tokens in enumerate(column_tokens)
+        if {"last", "name"} <= tokens
+    ]
+    if len(first_indexes) == 1 and len(last_indexes) == 1:
+        return sorted({first_indexes[0], last_indexes[0]})
+    return None
+
+
 def _remove_high_confidence_extra_columns(task: PublicTask, answer: AnswerTable) -> AnswerTable:
+    single_value_indexes = _single_value_target_column_indexes(task, answer)
+    if single_value_indexes is not None:
+        return _project_answer_columns(answer, single_value_indexes)
+
     explicit_indexes = _explicit_requested_column_indexes(task, answer)
     if explicit_indexes is not None:
         return _project_answer_columns(answer, explicit_indexes)
+
+    member_name_indexes = _member_name_column_indexes(task, answer)
+    if member_name_indexes is not None:
+        return _project_answer_columns(answer, member_name_indexes)
 
     single_target_indexes = _single_target_column_indexes(task, answer)
     if single_target_indexes is not None:
@@ -896,8 +1037,9 @@ def _build_difficulty_final_answer_reminder(task: PublicTask, state: AgentRuntim
             "- If multiple rows match the entity/filter, include all final rows; do not keep only the first row.",
             "- Remove helper/debug/join-key/source columns unless the question asks for them.",
             "- For similar fields such as rank/position, number/id, or date/datetime, verify the field meaning in the data before submitting.",
-            "- For easy race-driver questions, treat ranked/rank as a `rank` field before `position`; treat driver number as the driver's official `number`, not driverId.",
-            "- For time-like values, compare normalized times too: 0:01:54 can correspond to 1:54.xxx values.",
+            "- If the question has date/month/year wording, verify the observed encoded value format before submitting.",
+            "- If the question asks for a percentage, ratio, average, or rate, verify the denominator/unit and return that computed metric, not a raw count.",
+            "- If the final answer has more than 20 rows, do not hand-write the full Answer JSON; run Python and print `FINAL_TABLE_JSON:` instead.",
         ]
     )
 
@@ -1685,6 +1827,7 @@ def _build_planning_context(
                 f"{node['instruction']}"
             )
         lines.extend(MEDIUM_SEMANTIC_GUARD_LINES)
+        lines.extend(BIRD_SEMANTIC_CONTRACT_LINES)
         lines.append(
             "Priority: verify real tables/columns for requested concepts, decide the exact final "
             "answer columns, then compute and submit with no helper columns. Do not follow the "
@@ -1716,6 +1859,7 @@ def _build_planning_context(
             "observed_nodes": observed_nodes,
             "nodes": node_records,
             "semantic_guard": list(MEDIUM_SEMANTIC_GUARD_LINES),
+            "bird_semantic_contract": list(BIRD_SEMANTIC_CONTRACT_LINES),
             "prompt_prefix": prompt_prefix,
         }
         return prompt_prefix, snapshot
@@ -1750,6 +1894,7 @@ def _build_planning_context(
             f"- {evidence['id']} status={evidence['status']}: "
             f"{evidence['instruction']}"
         )
+    lines.extend(BIRD_SEMANTIC_CONTRACT_LINES)
     if loop_guard.get("triggered"):
         lines.append(
             "LOOP GUARD: the recent execution pattern repeated code, repeated output, "
@@ -1796,6 +1941,7 @@ def _build_planning_context(
         "observed_nodes": observed_nodes,
         "evidence_ledger": evidence_ledger,
         "loop_guard": loop_guard,
+        "bird_semantic_contract": list(BIRD_SEMANTIC_CONTRACT_LINES),
         "nodes": node_records,
         "prompt_prefix": prompt_prefix,
     }
@@ -1918,11 +2064,23 @@ class ReActAgent:
 
         instructions: list[str] = []
         if consecutive_parse_errors:
-            instructions.append(
-                "Runtime recovery: your previous response could not be parsed. "
-                "Do not repeat Thought-only text or <think> tags. Return exactly one valid step: "
-                "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
+            likely_truncated_answer = any(
+                bool(step.observation.get("likely_truncated_answer"))
+                for step in state.steps[-2:]
+                if isinstance(step.observation, dict)
             )
+            if likely_truncated_answer:
+                instructions.append(
+                    "Runtime recovery: your previous Answer JSON was too long or truncated. "
+                    "Do not write the rows manually. Run Python, recompute the exact final table, "
+                    "and print `FINAL_TABLE_JSON:` followed by JSON with `columns` and `rows`."
+                )
+            else:
+                instructions.append(
+                    "Runtime recovery: your previous response could not be parsed. "
+                    "Do not repeat Thought-only text or <think> tags. Return exactly one valid step: "
+                    "either `Thought:` plus a fenced `Code:` block, or `Thought:` plus `Answer:` with fenced JSON."
+                )
         loop_guard = (
             _loop_guard_summary(state)
             if _task_uses_advanced_planning(task)
@@ -2079,13 +2237,27 @@ class ReActAgent:
                 model_step = parse_model_step(raw_response)
             except Exception as exc:
                 consecutive_parse_errors += 1
+                response_lower = raw_response.casefold()
+                likely_truncated_answer = (
+                    "answer:" in response_lower
+                    and '"rows"' in response_lower
+                    and raw_response.count("[") >= 20
+                )
+                recovery_instruction = (
+                    "Return exactly one valid CodeAct step next. Do not repeat invalid text. "
+                    "Use `Thought:` plus fenced `Code:` or `Thought:` plus `Answer:` fenced JSON."
+                )
+                if likely_truncated_answer:
+                    recovery_instruction = (
+                        "Your Answer JSON appears too long or truncated. Do not hand-write the full rows. "
+                        "Run one compact Python step that recomputes the final table and prints exactly "
+                        "`FINAL_TABLE_JSON:` followed by JSON with `columns` and `rows`."
+                    )
                 observation = {
                     "ok": False,
                     "error": str(exc),
-                    "recovery_instruction": (
-                        "Return exactly one valid CodeAct step next. Do not repeat invalid text. "
-                        "Use `Thought:` plus fenced `Code:` or `Thought:` plus `Answer:` fenced JSON."
-                    ),
+                    "recovery_instruction": recovery_instruction,
+                    "likely_truncated_answer": likely_truncated_answer,
                 }
                 self._append_step(
                     task,
