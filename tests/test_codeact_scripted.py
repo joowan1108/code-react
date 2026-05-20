@@ -255,7 +255,7 @@ def test_final_answer_check_warns_about_likely_extra_columns() -> None:
         assert "debug_score" in check["warnings"][0]
 
 
-def test_sanitize_answer_projects_obvious_single_target_columns() -> None:
+def test_sanitize_answer_keeps_obvious_single_target_helper_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -274,11 +274,11 @@ def test_sanitize_answer_projects_obvious_single_target_columns() -> None:
             ),
         )
 
-        assert answer.columns == ["event_name"]
-        assert answer.rows == [["November Speaker"], ["October Speaker"]]
+        assert answer.columns == ["event_name", "cost"]
+        assert answer.rows == [["November Speaker", 6.0], ["October Speaker", 6.0]]
 
 
-def test_sanitize_answer_projects_comment_text_column() -> None:
+def test_sanitize_answer_keeps_comment_helper_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -297,11 +297,11 @@ def test_sanitize_answer_projects_comment_text_column() -> None:
             ),
         )
 
-        assert answer.columns == ["Text"]
-        assert answer.rows == [["Welcome to Cross Validated."]]
+        assert answer.columns == ["Id", "PostId", "Score", "Text"]
+        assert answer.rows == [[90813, 46764, 14, "Welcome to Cross Validated."]]
 
 
-def test_sanitize_answer_projects_single_value_metric_column() -> None:
+def test_sanitize_answer_keeps_single_value_metric_context_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -320,8 +320,8 @@ def test_sanitize_answer_projects_single_value_metric_column() -> None:
             ),
         )
 
-        assert answer.columns == ["total_amount_received"]
-        assert answer.rows == [[50]]
+        assert answer.columns == ["member_id", "first_name", "last_name", "position", "total_amount_received"]
+        assert answer.rows == [["recD078", "Phillip", "Cullen", "Vice President", 50]]
 
 
 def test_sanitize_answer_keeps_entity_metric_and_currency_columns() -> None:
@@ -350,7 +350,7 @@ def test_sanitize_answer_keeps_entity_metric_and_currency_columns() -> None:
         assert answer.rows == [["C-001", 9.5, "USD"]]
 
 
-def test_sanitize_answer_projects_member_list_to_names() -> None:
+def test_sanitize_answer_keeps_member_context_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -369,8 +369,8 @@ def test_sanitize_answer_projects_member_list_to_names() -> None:
             ),
         )
 
-        assert answer.columns == ["first_name", "last_name"]
-        assert answer.rows == [["Angela", "Sanders"]]
+        assert answer.columns == ["member_id", "first_name", "last_name", "email", "position"]
+        assert answer.rows == [["rec1", "Angela", "Sanders", "a@example.com", "Member"]]
 
 
 def test_sanitize_answer_keeps_explicit_member_contact_column() -> None:
@@ -396,7 +396,7 @@ def test_sanitize_answer_keeps_explicit_member_contact_column() -> None:
         assert answer.rows == [["Angela", "Sanders", "555-0101"]]
 
 
-def test_sanitize_answer_prefers_specific_name_over_full_name() -> None:
+def test_sanitize_answer_keeps_specific_and_full_name_columns() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -415,8 +415,8 @@ def test_sanitize_answer_prefers_specific_name_over_full_name() -> None:
             ),
         )
 
-        assert answer.columns == ["superhero_name"]
-        assert answer.rows == [["Black Flash"], ["Blackwulf"]]
+        assert answer.columns == ["superhero_name", "full_name"]
+        assert answer.rows == [["Black Flash", "-"], ["Blackwulf", "Lucian"]]
 
 
 def test_sanitize_answer_keeps_explicitly_requested_columns() -> None:

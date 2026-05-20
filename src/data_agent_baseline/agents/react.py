@@ -124,7 +124,7 @@ MEDIUM_PLANNING_NODES = (
 MEDIUM_SEMANTIC_GUARD_LINES = (
     "BIRD medium semantic guard:",
     "- Final columns: infer the requested output columns from the question; remove helper IDs, dates, join keys, and filter columns unless explicitly requested.",
-    "- Row grain: decide what one final row represents before filtering or grouping, such as event type, customer, transaction, station country, or monthly consumption.",
+    "- Row grain: decide what one final row represents before filtering or grouping, using the task wording and observed table values.",
     "- Formula/unit: for average monthly/yearly, ratio, percentage, proportion, per unit, or total wording, verify the denominator and unit from schema, samples, or knowledge before finalizing.",
     "- Value/date scope: before returning an empty table, check every plausible date/value source across CSV, JSON wrappers, and SQLite tables.",
     "- Ambiguous columns: when words like type/category/status/date/id can map to multiple columns, inspect actual values and choose the column whose values answer the question.",
@@ -491,319 +491,22 @@ def _normalize_answer_table(answer: AnswerTable) -> AnswerTable:
     )
 
 
-def _project_answer_columns(answer: AnswerTable, keep_indexes: list[int]) -> AnswerTable:
-    return AnswerTable(
-        columns=[answer.columns[index] for index in keep_indexes],
-        rows=[[row[index] for index in keep_indexes] for row in answer.rows],
-    )
-
-
-def _matching_column_indexes(answer: AnswerTable, token_groups: list[set[str]]) -> list[int] | None:
-    if not token_groups:
-        return None
-
-    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
-    keep: list[int] = []
-    for group in token_groups:
-        matches = [index for index, tokens in enumerate(column_tokens) if tokens & group]
-        if not matches:
-            return None
-        keep.extend(matches)
-
-    deduped = sorted(set(keep))
-    if not deduped or len(deduped) >= len(answer.columns):
-        return None
-    return deduped
-
-
-def _explicit_requested_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
-    question = task.question.casefold()
-    groups: list[set[str]] = []
-
-    if re.search(r"\bids?\b|identifier", question):
-        groups.append({"id"})
-    if re.search(r"\bsex\b|\bgender\b", question):
-        groups.append({"sex", "gender"})
-    if re.search(r"\bbirth(?:day)?\b|\bborn\b", question):
-        groups.append({"birthday", "birth", "date"})
-    if re.search(r"\bdisease\b|diagnos", question):
-        groups.append({"disease", "diagnosis"})
-    if "type of expense" in question or "expense type" in question:
-        groups.append({"type", "category"})
-    if "total value" in question or "total cost" in question or "total amount" in question:
-        groups.append({"total", "value", "cost", "amount", "sum"})
-
-    if len(groups) < 2:
-        return None
-    return _matching_column_indexes(answer, groups)
-
-
-def _single_target_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
-    if len(answer.columns) <= 1 or _question_is_single_value(task.question):
-        return None
-
-    question = task.question.casefold()
-    question_tokens = _split_identifier_tokens(task.question)
-    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
-    metric_tokens = {
-        "amount",
-        "budget",
-        "consumption",
-        "cost",
-        "count",
-        "date",
-        "expense",
-        "price",
-        "score",
-        "time",
-        "total",
-        "value",
-        "view",
-        "viewcount",
-        "views",
-    }
-    multi_output_cues = (
-        " and include ",
-        " include ",
-        " with their ",
-        " with its ",
-        " give their ",
-        " along with ",
-    )
-    has_explicit_metric_request = bool(question_tokens & metric_tokens)
-    has_metric_column = any(tokens & metric_tokens for tokens in column_tokens)
-    has_multi_output_cue = any(cue in question for cue in multi_output_cues)
-
-    target_groups: list[set[str]] = []
-    if re.search(r"\bwhat(?:'s| is) the comment\b|\bcomment with\b", question):
-        target_groups.append({"comment", "text", "body", "content"})
-    elif re.search(r"\b(names?|name) of\b|\bname the\b|\bwhat are the names\b", question):
-        if has_multi_output_cue or (has_explicit_metric_request and has_metric_column):
-            return None
-        target_groups.append({"name"})
-    elif re.search(r"\bwhich event\b|\bwhat event\b", question):
-        if has_multi_output_cue:
-            return None
-        target_groups.append({"event", "name", "title"})
-    elif re.search(r"\bwhich race\b|\bwhat race\b", question):
-        if has_multi_output_cue:
-            return None
-        target_groups.append({"race", "name", "title"})
-    elif re.search(r"\bstate the date\b|\bwhat date\b|\bwhich date\b", question):
-        target_groups.append({"date"})
-    elif "finish time" in question:
-        target_groups.append({"time"})
-    elif re.search(r"\bnumber of the driver\b|\bdriver number\b", question):
-        target_groups.append({"number"})
-    elif re.search(r"\bcountries\b|\bcountry\b", question):
-        target_groups.append({"country"})
-    else:
-        return None
-
-    if target_groups[0] == {"name"}:
-        name_indexes = [
-            index for index, tokens in enumerate(column_tokens) if tokens & target_groups[0]
-        ]
-        if not name_indexes:
-            return None
-        subject_matches = [
-            index
-            for index in name_indexes
-            if column_tokens[index] & (question_tokens - {"name", "names"})
-        ]
-        if subject_matches:
-            name_indexes = subject_matches
-        non_full_name = [index for index in name_indexes if "full" not in column_tokens[index]]
-        if non_full_name:
-            name_indexes = non_full_name
-        keep = sorted(set(name_indexes))
-    else:
-        keep = _matching_column_indexes(answer, target_groups)
-        if keep is None:
-            return None
-
-    if len(keep) >= len(answer.columns):
-        return None
-    return keep
-
-
-def _single_value_target_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
-    if len(answer.columns) <= 1 or not _question_is_single_value(task.question):
-        return None
-
-    question = task.question.casefold()
-    question_tokens = _split_identifier_tokens(task.question)
-    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
-    target_groups: list[set[str]] = []
-
-    if "source" in question_tokens:
-        target_groups.append({"source"})
-    elif question_tokens & {"percentage", "percent"}:
-        target_groups.append({"percentage", "percent"})
-    elif question_tokens & {"ratio", "proportion"}:
-        target_groups.append({"ratio", "proportion", "rate"})
-    elif "how many times" in question:
-        target_groups.append({"ratio", "times", "fold"})
-    elif question_tokens & {"average", "avg", "mean"}:
-        target_groups.append({"average", "avg", "mean", "consumption", "amount", "score"})
-    elif question_tokens & {"amount", "fund", "funds", "spent", "cost", "budget", "price", "value"}:
-        target_groups.append({"amount", "fund", "funds", "spent", "cost", "budget", "price", "value", "total"})
-    elif question_tokens & {"count", "number"} or "how many" in question:
-        target_groups.append({"count", "number", "num", "total", "n"})
-    elif question_tokens & {"date", "time"}:
-        target_groups.append({"date", "time"})
-    else:
-        return None
-
-    candidate_indexes: list[int] = []
-    for group in target_groups:
-        candidate_indexes.extend(
-            index
-            for index, tokens in enumerate(column_tokens)
-            if tokens & group
-        )
-
-    deduped = sorted(set(candidate_indexes))
-    if len(deduped) != 1:
-        return None
-    return deduped
-
-
-def _member_name_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
-    if len(answer.columns) <= 2 or _question_is_single_value(task.question):
-        return None
-    if _question_has_multi_column_output_cue(task.question):
-        return None
-    question = task.question.casefold()
-    question_tokens = _split_identifier_tokens(task.question)
-    explicit_other_outputs = {
-        "address",
-        "amount",
-        "birthday",
-        "birthdate",
-        "budget",
-        "contact",
-        "cost",
-        "date",
-        "diagnosis",
-        "disease",
-        "email",
-        "fund",
-        "funds",
-        "gender",
-        "id",
-        "identifier",
-        "phone",
-        "position",
-        "price",
-        "role",
-        "sex",
-        "status",
-        "time",
-        "title",
-        "total",
-    }
-    if question_tokens & explicit_other_outputs:
-        return None
-    if not re.search(r"\bmembers?\b|\bstudents?\b|\bpeople\b|\bpersons?\b", question):
-        return None
-
-    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
-    first_indexes = [
-        index
-        for index, tokens in enumerate(column_tokens)
-        if {"first", "name"} <= tokens
-    ]
-    last_indexes = [
-        index
-        for index, tokens in enumerate(column_tokens)
-        if {"last", "name"} <= tokens
-    ]
-    if len(first_indexes) == 1 and len(last_indexes) == 1:
-        return sorted({first_indexes[0], last_indexes[0]})
-    return None
-
-
-def _remove_high_confidence_extra_columns(task: PublicTask, answer: AnswerTable) -> AnswerTable:
-    single_value_indexes = _single_value_target_column_indexes(task, answer)
-    if single_value_indexes is not None:
-        return _project_answer_columns(answer, single_value_indexes)
-
-    explicit_indexes = _explicit_requested_column_indexes(task, answer)
-    if explicit_indexes is not None:
-        return _project_answer_columns(answer, explicit_indexes)
-
-    member_name_indexes = _member_name_column_indexes(task, answer)
-    if member_name_indexes is not None:
-        return _project_answer_columns(answer, member_name_indexes)
-
-    single_target_indexes = _single_target_column_indexes(task, answer)
-    if single_target_indexes is not None:
-        return _project_answer_columns(answer, single_target_indexes)
-
-    return answer
-
-
-def _question_has_multi_column_output_cue(question: str) -> bool:
-    q = f" {question.casefold()} "
-    return any(
-        cue in q
-        for cue in (
-            " and include ",
-            " along with ",
-            " include ",
-            " with their ",
-            " with its ",
-            " give their ",
-            " give its ",
-            " please give ",
-            " list their ",
-        )
-    )
-
-
-def _task_is_easy(task: PublicTask) -> bool:
-    return task.difficulty.casefold() == "easy"
-
-
 def _task_is_medium(task: PublicTask) -> bool:
     return task.difficulty.casefold() == "medium"
 
 
-def _easy_record_id_column_indexes(task: PublicTask, answer: AnswerTable) -> list[int] | None:
-    if not _task_is_easy(task) or len(answer.columns) <= 1:
-        return None
-    if _question_is_single_value(task.question):
-        return None
-    if _question_has_multi_column_output_cue(task.question):
-        return None
-
-    question = task.question.casefold()
-    column_tokens = [_split_identifier_tokens(column) for column in answer.columns]
-    entity_groups: list[set[str]] = []
-    if re.search(r"\btransactions?\b|\bwithdrawals?\b", question):
-        entity_groups.append({"trans", "transaction"})
-
-    if not entity_groups:
-        return None
-
-    matches: list[int] = []
-    for index, tokens in enumerate(column_tokens):
-        if "id" not in tokens:
+def _deduplicate_answer_rows(answer: AnswerTable) -> AnswerTable:
+    seen: set[tuple[object, ...]] = set()
+    rows: list[list[object]] = []
+    for row in answer.rows:
+        key = tuple(row)
+        if key in seen:
             continue
-        if any(tokens & group for group in entity_groups):
-            matches.append(index)
-
-    if len(matches) != 1:
-        return None
-    return matches
-
-
-def _apply_easy_deterministic_projection(task: PublicTask, answer: AnswerTable) -> AnswerTable:
-    keep_indexes = _easy_record_id_column_indexes(task, answer)
-    if keep_indexes is None:
+        seen.add(key)
+        rows.append(row)
+    if len(rows) == len(answer.rows):
         return answer
-    return _project_answer_columns(answer, keep_indexes)
+    return AnswerTable(columns=list(answer.columns), rows=rows)
 
 
 def _is_missing_answer_cell(value: object) -> bool:
@@ -842,21 +545,7 @@ def _drop_incomplete_answer_rows(task: PublicTask, answer: AnswerTable) -> Answe
 def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable:
     normalized = _normalize_answer_table(answer)
     complete_rows = _drop_incomplete_answer_rows(task, normalized)
-    projected = _remove_high_confidence_extra_columns(task, complete_rows)
-    return _apply_easy_deterministic_projection(task, projected)
-
-
-def _answer_projection_preview(task: PublicTask, answer: AnswerTable) -> dict[str, object] | None:
-    normalized = _normalize_answer_table(answer)
-    projected = _remove_high_confidence_extra_columns(task, normalized)
-    if projected.columns == normalized.columns:
-        return None
-    return {
-        "original_columns": list(normalized.columns),
-        "projected_columns": list(projected.columns),
-        "reason": "high-confidence final-column projection",
-    }
-
+    return _deduplicate_answer_rows(complete_rows)
 
 
 def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None:
@@ -1082,6 +771,14 @@ def _candidate_decision_from_observation(
     if _question_is_single_value(task.question) and (len(answer.rows) != 1 or len(answer.columns) != 1):
         reasons.append("single_value_question_requires_one_cell_answer")
         hard_reasons.append("single_value_question_requires_one_cell_answer")
+
+    answer_warnings = _final_answer_check_warnings(task, answer)
+    if answer_warnings:
+        reasons.append("final_answer_check_warnings_present")
+        hard_reasons.append("final_answer_check_warnings_present")
+    if len(answer.rows) <= 20:
+        reasons.append("small_candidate_requires_model_review")
+        hard_reasons.append("small_candidate_requires_model_review")
 
     store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
     return CandidateAnswerDecision(
@@ -1518,11 +1215,34 @@ def _answer_column_is_semantically_suspicious(task: PublicTask, answer: AnswerTa
     return False
 
 
+def _final_answer_check_warnings(task: PublicTask, answer: AnswerTable) -> list[str]:
+    check = _final_answer_check(task, answer)
+    warnings = check.get("warnings", [])
+    if not isinstance(warnings, list):
+        return []
+    return [str(warning) for warning in warnings if warning]
+
+
 def _answer_is_submission_ready(task: PublicTask, answer: AnswerTable) -> bool:
     return (
         _answer_has_submission_shape(task, answer)
         and not _answer_column_is_semantically_suspicious(task, answer)
+        and not _final_answer_check_warnings(task, answer)
     )
+
+
+def _latest_candidate_review_instruction(state: AgentRuntimeState) -> str | None:
+    for step in reversed(state.steps[-3:]):
+        observation = step.observation
+        if not isinstance(observation, dict):
+            continue
+        content = observation.get("content")
+        if not isinstance(content, dict):
+            continue
+        instruction = content.get("candidate_review_instruction")
+        if isinstance(instruction, str) and instruction:
+            return instruction
+    return None
 
 
 def _medium_empty_answer_recheck_seen(state: AgentRuntimeState) -> bool:
@@ -2113,7 +1833,10 @@ class ReActAgent:
                 "Use its `row_ids`, `usable_filter`, `value_matches`, and `join_candidates` to connect question "
                 "mentions or markdown records to actual structured data. You may continue solving in the same script."
             )
-        if _should_prioritize_answer_submission(
+        candidate_review_instruction = _latest_candidate_review_instruction(state)
+        if candidate_review_instruction:
+            instructions.append(candidate_review_instruction)
+        elif _should_prioritize_answer_submission(
             task,
             state,
             fallback_answer,
@@ -2340,7 +2063,25 @@ class ReActAgent:
                 }
                 candidate_answer = self._candidate_answer_from_observation(task, observation)
                 if candidate_answer is not None:
-                    content["final_answer_check"] = _final_answer_check(task, candidate_answer)
+                    final_answer_check = _final_answer_check(task, candidate_answer)
+                    content["final_answer_check"] = final_answer_check
+                    warnings = final_answer_check.get("warnings", [])
+                    review_reasons: list[str] = []
+                    if isinstance(warnings, list) and warnings:
+                        review_reasons.extend(str(warning) for warning in warnings[:3])
+                    if len(candidate_answer.rows) <= 20:
+                        review_reasons.append("candidate has <=20 rows, so the model should confirm final shape")
+                    if review_reasons:
+                        content["candidate_review_instruction"] = (
+                            "Runtime final-answer review: Python printed a plausible final table, "
+                            "but the runtime is not auto-submitting it. Do not run more exploration just because of this. "
+                            "If the candidate columns and rows exactly answer the question, submit `Answer:` "
+                            "with that table now. If a warning identifies a real extra/missing column or wrong "
+                            "row shape, submit the corrected table. Candidate preview: "
+                            f"{_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
+                            "Review reasons: "
+                            + "; ".join(review_reasons)
+                        )
                 step_record = StepRecord(
                     step_index=step_index,
                     thought=model_step.thought,
