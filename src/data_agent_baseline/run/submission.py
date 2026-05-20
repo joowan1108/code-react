@@ -28,6 +28,18 @@ def _env_float(name: str, default: float) -> float:
     return float(raw_value)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    normalized = raw_value.strip().casefold()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _normalize_model_api_url(api_base: str) -> str:
     normalized = api_base.rstrip("/")
     if not normalized:
@@ -69,6 +81,8 @@ def build_submission_config(
             observation_tail_chars=_env_int("AGENT_OBSERVATION_TAIL_CHARS", 1800),
             stderr_tail_chars=_env_int("AGENT_STDERR_TAIL_CHARS", 4000),
             final_marker_chars=_env_int("AGENT_FINAL_MARKER_CHARS", 4000),
+            verifier_enabled=_env_bool("AGENT_VERIFIER_ENABLED", True),
+            verifier_stdout_chars=_env_int("AGENT_VERIFIER_STDOUT_CHARS", 2500),
         ),
         run=RunConfig(
             output_dir=scratch_root,
@@ -164,6 +178,8 @@ def run_submission(
                         "observation_tail_chars": config.agent.observation_tail_chars,
                         "stderr_tail_chars": config.agent.stderr_tail_chars,
                         "final_marker_chars": config.agent.final_marker_chars,
+                        "verifier_enabled": config.agent.verifier_enabled,
+                        "verifier_stdout_chars": config.agent.verifier_stdout_chars,
                     },
                     "input_root": str(input_root),
                     "output_root": str(output_root),

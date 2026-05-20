@@ -16,6 +16,7 @@ from data_agent_baseline.agents.react import (
     _candidate_decision_from_observation,
     _evidence_consistency_warnings,
     _final_answer_check,
+    _parse_verifier_decision,
     _python_repair_hints,
     _render_observation_for_prompt,
     _sanitize_answer_table,
@@ -929,7 +930,7 @@ def test_evidence_consistency_requires_final_computation_link() -> None:
             record=TaskRecord(
                 task_id="task_consistency",
                 difficulty="hard",
-                question="Which patients have abnormal PT values?",
+                question="List the ID of patients with abnormal PT values.",
             ),
             assets=TaskAssets(task_dir=context_path, context_dir=context_path),
         )
@@ -970,14 +971,46 @@ def test_evidence_consistency_requires_final_computation_link() -> None:
         assert resolved_warnings == []
 
 
-def test_candidate_with_evidence_consistency_warning_is_not_fallback() -> None:
+def test_evidence_consistency_warning_is_trace_only_without_verifier_rejection() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
             record=TaskRecord(
                 task_id="task_consistency_candidate",
                 difficulty="hard",
-                question="Which patients have abnormal PT values?",
+                question="List the ID of patients with abnormal PT values.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = AnswerTable(columns=["ID"], rows=[[index] for index in range(21)])
+        decision = _candidate_decision_from_observation(
+            task,
+            {
+                "ok": True,
+                "tool": "execute_python",
+                "content": {
+                    "output": "",
+                    "evidence_consistency_warnings": [
+                        "missing EVIDENCE_CONSISTENCY_JSON"
+                    ],
+                },
+            },
+            answer,
+        )
+
+        assert decision.auto_submit is True
+        assert decision.store_as_fallback is True
+        assert "evidence_consistency_warnings_present" not in decision.reasons
+
+
+def test_independent_verifier_rejection_blocks_candidate() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_verifier_candidate",
+                difficulty="hard",
+                question="List the ID of patients with abnormal PT values.",
             ),
             assets=TaskAssets(task_dir=context_path, context_dir=context_path),
         )
@@ -989,10 +1022,11 @@ def test_candidate_with_evidence_consistency_warning_is_not_fallback() -> None:
                 "tool": "execute_python",
                 "content": {
                     "output": "",
-                    "evidence_consistency_warnings": [
-                        "missing EVIDENCE_CONSISTENCY_JSON"
-                    ],
-                    "candidate_review_instruction": "verify consistency first",
+                    "independent_verifier": {
+                        "verdict": "reject",
+                        "reasons": ["threshold was not applied"],
+                    },
+                    "verifier_rejected": True,
                 },
             },
             answer,
@@ -1000,7 +1034,52 @@ def test_candidate_with_evidence_consistency_warning_is_not_fallback() -> None:
 
         assert decision.auto_submit is False
         assert decision.store_as_fallback is False
-        assert "evidence_consistency_warnings_present" in decision.reasons
+        assert "independent_verifier_rejected" in decision.reasons
+
+
+def test_independent_verifier_accepts_small_candidate_without_extra_review() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_verifier_accept",
+                difficulty="hard",
+                question="List the ID of patients with abnormal PT values.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = AnswerTable(columns=["ID"], rows=[[1], [2]])
+        decision = _candidate_decision_from_observation(
+            task,
+            {
+                "ok": True,
+                "tool": "execute_python",
+                "content": {
+                    "output": "",
+                    "independent_verifier": {
+                        "verdict": "accept",
+                        "reasons": ["code output matches candidate"],
+                    },
+                },
+            },
+            answer,
+        )
+
+        assert decision.auto_submit is True
+        assert decision.store_as_fallback is True
+        assert "small_candidate_requires_model_review" not in decision.reasons
+
+
+def test_parse_independent_verifier_decision() -> None:
+    decision = _parse_verifier_decision(
+        "```json\n"
+        '{"verdict":"reject","reasons":["wrong denominator"],"repair_instruction":"recompute ratio"}'
+        "\n```"
+    )
+
+    assert decision.verdict == "reject"
+    assert decision.reasons == ("wrong denominator",)
+    assert decision.repair_instruction == "recompute ratio"
 
 
 def test_loop_guard_warns_after_repeated_python_execution() -> None:

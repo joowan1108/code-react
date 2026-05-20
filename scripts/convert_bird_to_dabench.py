@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -72,7 +73,11 @@ def _question_token_overlap(left: Any, right: Any) -> float:
 def _load_excluded_questions(input_roots: list[Path]) -> dict[str, list[str]]:
     excluded: dict[str, list[str]] = {}
     for input_root in input_roots:
-        task_json_paths = [input_root] if input_root.is_file() else sorted(input_root.rglob("task.json"))
+        if input_root.is_file():
+            task_json_paths = [input_root]
+        else:
+            shallow_task_paths = sorted(input_root.glob("task_*/task.json"))
+            task_json_paths = shallow_task_paths or sorted(input_root.rglob("task.json"))
         for task_json_path in task_json_paths:
             try:
                 payload = _read_json(task_json_path)
@@ -128,6 +133,33 @@ def _normalize_difficulty(value: Any, default: str) -> str:
         return default
     normalized = str(value).strip().casefold()
     return DIFFICULTY_MAP.get(normalized, default)
+
+
+def _parse_difficulty_quotas(values: list[str]) -> dict[str, int]:
+    quotas: dict[str, int] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(
+                "--difficulty-quota must be formatted as difficulty=count, "
+                f"got {value!r}."
+            )
+        difficulty_raw, count_raw = value.split("=", 1)
+        difficulty = _normalize_difficulty(difficulty_raw, default="")
+        if difficulty not in {"easy", "medium", "hard", "extreme"}:
+            raise ValueError(
+                "--difficulty-quota difficulty must be one of easy, medium, hard, extreme; "
+                f"got {difficulty_raw!r}."
+            )
+        try:
+            count = int(count_raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"--difficulty-quota count must be an integer, got {count_raw!r}."
+            ) from exc
+        if count < 0:
+            raise ValueError("--difficulty-quota count must be non-negative.")
+        quotas[difficulty] = quotas.get(difficulty, 0) + count
+    return quotas
 
 
 def _find_split_json(bird_root: Path, split: str) -> Path:
@@ -343,6 +375,16 @@ def _write_task_json(path: Path, *, task_id: str, difficulty: str, question: str
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _copy_or_link_file(source: Path, destination: Path, *, hardlink: bool) -> None:
+    if hardlink:
+        try:
+            os.link(source, destination)
+            return
+        except OSError:
+            pass
+    shutil.copy2(source, destination)
+
+
 def _write_knowledge(
     path: Path,
     *,
@@ -462,7 +504,7 @@ def _convert_record(
     context_dir = task_input_dir / "context"
     db_out_dir = context_dir / "db"
     db_out_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(db_path, db_out_dir / db_path.name)
+    _copy_or_link_file(db_path, db_out_dir / db_path.name, hardlink=args.hardlink_databases)
 
     _write_task_json(
         task_input_dir / "task.json",
@@ -593,6 +635,17 @@ def parse_args() -> argparse.Namespace:
         help="Difficulty used when the BIRD record does not provide one.",
     )
     parser.add_argument(
+        "--difficulty-quota",
+        action="append",
+        default=[],
+        metavar="DIFFICULTY=COUNT",
+        help=(
+            "Only convert up to COUNT records for a normalized difficulty. "
+            "Can be passed multiple times, e.g. --difficulty-quota easy=10 "
+            "--difficulty-quota medium=15. Difficulties not listed are skipped."
+        ),
+    )
+    parser.add_argument(
         "--no-knowledge",
         dest="write_knowledge",
         action="store_false",
@@ -612,6 +665,14 @@ def parse_args() -> argparse.Namespace:
         "--overwrite",
         action="store_true",
         help="Remove the output root before conversion.",
+    )
+    parser.add_argument(
+        "--hardlink-databases",
+        action="store_true",
+        help=(
+            "Use filesystem hardlinks for copied SQLite database files when possible. "
+            "This saves disk space for local evaluation sets with many tasks sharing the same DB."
+        ),
     )
     parser.add_argument(
         "--no-database-description",
@@ -651,6 +712,7 @@ def main() -> None:
     ]
     if not 0.0 <= args.exclude_near_threshold <= 1.0:
         raise ValueError("--exclude-near-threshold must be between 0 and 1.")
+    difficulty_quotas = _parse_difficulty_quotas(args.difficulty_quota)
 
     if args.overwrite and args.out_root.exists():
         shutil.rmtree(args.out_root)
@@ -667,10 +729,17 @@ def main() -> None:
 
     db_cache: dict[str, Path] = {}
     converted: list[ConvertedTask] = []
+    converted_by_difficulty: dict[str, int] = {difficulty: 0 for difficulty in difficulty_quotas}
     skipped_question_overlaps: list[dict[str, Any]] = []
+    skipped_difficulty_quota_count = 0
     considered_count = 0
     for local_index, record in enumerate(records[args.start :], start=args.start):
         if args.limit is not None and len(converted) >= args.limit:
+            break
+        if difficulty_quotas and all(
+            converted_by_difficulty.get(difficulty, 0) >= count
+            for difficulty, count in difficulty_quotas.items()
+        ):
             break
         considered_count += 1
         question = _first_present(record, QUESTION_KEYS)
@@ -691,6 +760,17 @@ def main() -> None:
                     }
                 )
                 continue
+        difficulty = _normalize_difficulty(
+            _first_present(record, DIFFICULTY_KEYS),
+            args.default_difficulty,
+        )
+        if difficulty_quotas:
+            if difficulty not in difficulty_quotas:
+                skipped_difficulty_quota_count += 1
+                continue
+            if converted_by_difficulty.get(difficulty, 0) >= difficulty_quotas[difficulty]:
+                skipped_difficulty_quota_count += 1
+                continue
         task = _convert_record(
             record,
             index=local_index,
@@ -700,18 +780,32 @@ def main() -> None:
         )
         if task is not None:
             converted.append(task)
+            if difficulty_quotas:
+                converted_by_difficulty[task.difficulty] = (
+                    converted_by_difficulty.get(task.difficulty, 0) + 1
+                )
 
     manifest = {
         "source": "BIRD",
         "split_json": str(split_json),
         "record_start": args.start,
         "requested_limit": args.limit,
+        "difficulty_quotas": difficulty_quotas,
+        "converted_by_difficulty": (
+            converted_by_difficulty
+            if difficulty_quotas
+            else {
+                difficulty: sum(1 for task in converted if task.difficulty == difficulty)
+                for difficulty in ("easy", "medium", "hard", "extreme")
+            }
+        ),
         "considered_count": considered_count,
         "converted_count": len(converted),
         "exclude_input_roots": [str(path) for path in args.exclude_input_root],
         "exclude_near_threshold": args.exclude_near_threshold,
         "excluded_question_count": len(excluded_questions),
         "skipped_question_overlap_count": len(skipped_question_overlaps),
+        "skipped_difficulty_quota_count": skipped_difficulty_quota_count,
         "skipped_question_overlaps": skipped_question_overlaps,
         "input_root": str(args.out_root / "input"),
         "gold_root": str(args.out_root / "output"),
