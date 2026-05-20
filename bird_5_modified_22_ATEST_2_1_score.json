@@ -1,0 +1,2045 @@
+{
+  "run_dir": "C:\\Users\\joowa\\OneDrive\\바탕 화면\\exec_react\\kddcup2026-data-agents-starter-kit\\artifacts\\runs\\bird_5_modified_22_ATEST_2_1",
+  "gold_root": "C:\\Users\\joowa\\OneDrive\\바탕 화면\\exec_react\\kddcup2026-data-agents-starter-kit\\data\\public\\output",
+  "penalty_lambda_assumption": 0.1,
+  "task_count": 107,
+  "prediction_count": 57,
+  "gold_count": 50,
+  "total_score": 0.0,
+  "perfect_score_count": 0,
+  "tasks": [
+    {
+      "task_id": "task_100148",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100150",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100151",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100154",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100155",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100156",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100157",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100158",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100159",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100160",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100161",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100166",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100167",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100169",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100170",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100171",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100174",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100175",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100177",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100181",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100182",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100183",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100184",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100186",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100189",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100318",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100322",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100326",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100328",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100340",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100358",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100372",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100386",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100392",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100395",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100400",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100403",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100404",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100406",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100408",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100409",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100410",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100411",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100415",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100416",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100421",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100426",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100428",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100429",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100432",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100433",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100436",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100447",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100451",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100460",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100465",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_100467",
+      "prediction_exists": true,
+      "gold_exists": false,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 0,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": false,
+      "notes": [
+        "missing_gold"
+      ]
+    },
+    {
+      "task_id": "task_11",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 3,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_145",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_163",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 2,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_169",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_173",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_180",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_19",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 2,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_194",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_196",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_199",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 2,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_200",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_214",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_218",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_22",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_24",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_243",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_249",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 2,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_25",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_250",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_257",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 2,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_259",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_26",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_261",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_269",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_27",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 3,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_283",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_287",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_292",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_303",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_305",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_330",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 2,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_344",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_349",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_350",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_352",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_355",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 3,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_379",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_38",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_396",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_408",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_415",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 2,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_418",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_420",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_64",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_67",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_74",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_75",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_80",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_86",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    },
+    {
+      "task_id": "task_89",
+      "prediction_exists": false,
+      "gold_exists": true,
+      "matched_gold_columns": 0,
+      "matched_predicted_columns": 0,
+      "gold_columns": 1,
+      "predicted_columns": 0,
+      "extra_columns": 0,
+      "recall": 0.0,
+      "penalty": 0.0,
+      "score": 0.0,
+      "direct_matches": 0,
+      "name_pair_matches": 0,
+      "missing_prediction": true,
+      "notes": [
+        "missing_prediction"
+      ]
+    }
+  ]
+}

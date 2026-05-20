@@ -38,16 +38,6 @@ class CandidateAnswerDecision:
     reasons: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class FinalAnswerProjection:
-    answer: AnswerTable
-    changed: bool
-    confidence: str
-    kept_columns: tuple[str, ...]
-    dropped_columns: tuple[str, ...]
-    reasons: tuple[str, ...]
-
-
 FINAL_RESULT_MARKERS = (
     "FINAL_TABLE_JSON:",
     "FINAL_RESULT:",
@@ -149,20 +139,19 @@ MEDIUM_PLANNING_NODES = (
 
 MEDIUM_SEMANTIC_GUARD_LINES = (
     "Structured-data medium semantic guard:",
-    "- Final columns: infer the requested output columns from the question; remove helper IDs, dates, join keys, and filter columns unless explicitly requested.",
+    "- Final shape: identify the requested output fields separately from fields used only for filtering, joining, grouping, sorting, or verification.",
     "- Row grain: decide what one final row represents before filtering or grouping, using the task wording and observed table values.",
-    "- Formula/unit: for average monthly/yearly, ratio, percentage, proportion, per unit, or total wording, verify the denominator and unit from schema, samples, or knowledge before finalizing.",
-    "- Value/date scope: before returning an empty table, check every plausible date/value source across CSV, JSON wrappers, and SQLite tables.",
-    "- Ambiguous columns: when words like type/category/status/date/id can map to multiple columns, inspect actual values and choose the column whose values answer the question.",
+    "- Source mapping: map each requested output, condition, join, and calculation to concrete observed columns or records before computing.",
+    "- Ambiguity check: when multiple sources could satisfy a concept, inspect compact samples or distinct values and choose the source whose values match the concept's role.",
+    "- Empty-result check: before returning an empty table, run one targeted check over plausible sources to confirm the mapping and filters.",
 )
 
 STRUCTURED_SEMANTIC_CONTRACT_LINES = (
     "Structured-data semantic contract:",
-    "- Before finalizing a calculation, write down the row grain, filters, formula, denominator/unit, and final output shape in the Thought or compact Python prints.",
-    "- Date/month/year mentions must be matched to observed encoded values in the data, such as YYYYMM, YYYY-MM-DD, or separate year/month columns.",
-    "- Percentage, ratio, increase/decrease rate, and how-many-times questions require an explicit numerator and denominator before submission.",
-    "- Average monthly/yearly wording requires checking whether the data is already monthly/yearly or needs unit conversion.",
-    "- Normal/abnormal/range/severe/status wording requires a grounded threshold or coded meaning from data or markdown before filtering.",
+    "- Do not rely on column names alone; every important question concept must be backed by observed source evidence.",
+    "- Keep a compact source map for the final computation: output fields, filters, joins, grouping/sorting keys, calculations, and row grain.",
+    "- If a concept has multiple plausible source columns or records, compare observed values before choosing one.",
+    "- If a required mapping remains unresolved, run a targeted inspection instead of finalizing.",
     "- If the final answer has more than 20 rows, do not hand-write the Answer JSON; print `FINAL_TABLE_JSON:` from Python so the runtime can submit it.",
 )
 
@@ -590,175 +579,6 @@ def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable
     return _deduplicate_answer_rows(complete_rows)
 
 
-def _question_mentions_identifier(question_tokens: set[str]) -> bool:
-    return bool(question_tokens & {"id", "ids", "identifier", "identifiers", "code", "key", "keys"})
-
-
-def _question_mentions_column_family(question_tokens: set[str], column_tokens: set[str]) -> bool:
-    return bool(question_tokens & column_tokens)
-
-
-def _find_final_metric_columns(task: PublicTask, answer: AnswerTable) -> set[int]:
-    question = task.question.casefold()
-    question_tokens = _split_identifier_tokens(task.question)
-    final_metric_indices: set[int] = set()
-
-    percentage_question = (
-        bool(question_tokens & {"percentage", "percent", "proportion"})
-        or "what percentage" in question
-        or "calculate the percentage" in question
-    )
-    ratio_question = (
-        bool(question_tokens & {"ratio", "rate"})
-        or "how many times" in question
-    )
-    aggregate_question = bool(
-        question_tokens
-        & {"average", "avg", "mean", "amount", "cost", "price", "value", "total", "sum", "count"}
-    )
-
-    for index, column in enumerate(answer.columns):
-        tokens = _split_identifier_tokens(column)
-        if percentage_question and tokens & {"percentage", "percent", "proportion"}:
-            final_metric_indices.add(index)
-        elif ratio_question and tokens & {"ratio", "rate"}:
-            final_metric_indices.add(index)
-        elif aggregate_question and tokens & question_tokens & {
-            "average",
-            "avg",
-            "mean",
-            "amount",
-            "cost",
-            "price",
-            "value",
-            "total",
-            "sum",
-            "count",
-        }:
-            final_metric_indices.add(index)
-    return final_metric_indices
-
-
-def _definite_helper_column_reason(
-    task: PublicTask,
-    answer: AnswerTable,
-    column_index: int,
-    final_metric_indices: set[int],
-) -> str | None:
-    column = answer.columns[column_index]
-    column_text = column.strip().casefold()
-    column_tokens = _split_identifier_tokens(column)
-    question_tokens = _split_identifier_tokens(task.question)
-
-    if not column_tokens and not column_text:
-        return "blank column name"
-
-    if column_text.startswith("unnamed:"):
-        return "unnamed dataframe index column"
-
-    if column_tokens & {"debug", "helper", "tmp", "temp", "intermediate"}:
-        return "debug/helper/intermediate column"
-
-    if column_tokens & {"source", "path", "filepath", "filename"} and not _question_mentions_column_family(
-        question_tokens,
-        column_tokens,
-    ):
-        return "source/path bookkeeping column"
-
-    if column_tokens & {"index", "rowindex"} and not question_tokens & {"index", "rank", "position"}:
-        return "row index column"
-
-    if "row_number" in column_text or "rownum" in column_text:
-        if not question_tokens & {"row", "number", "rank", "position"}:
-            return "row-number helper column"
-
-    if column_tokens & {"join", "key"} and not _question_mentions_identifier(question_tokens):
-        return "join-key helper column"
-
-    if column_tokens & {"numerator", "denominator"}:
-        if final_metric_indices and not question_tokens & {"numerator", "denominator"}:
-            return "numerator/denominator helper for final metric"
-
-    if final_metric_indices and column_index not in final_metric_indices:
-        if column_tokens & {"count", "counts", "total", "totals", "number", "num", "n"}:
-            if not question_tokens & {"count", "total", "number", "num", "n"}:
-                return "count/total helper for final metric"
-
-    return None
-
-
-def _project_final_answer(task: PublicTask, answer: AnswerTable) -> FinalAnswerProjection:
-    sanitized = _sanitize_answer_table(task, answer)
-    if len(sanitized.columns) <= 1:
-        return FinalAnswerProjection(
-            answer=sanitized,
-            changed=False,
-            confidence="none",
-            kept_columns=tuple(sanitized.columns),
-            dropped_columns=(),
-            reasons=(),
-        )
-
-    final_metric_indices = _find_final_metric_columns(task, sanitized)
-    drop_reasons: dict[int, str] = {}
-    for index, _ in enumerate(sanitized.columns):
-        reason = _definite_helper_column_reason(task, sanitized, index, final_metric_indices)
-        if reason is not None:
-            drop_reasons[index] = reason
-
-    if not drop_reasons:
-        return FinalAnswerProjection(
-            answer=sanitized,
-            changed=False,
-            confidence="none",
-            kept_columns=tuple(sanitized.columns),
-            dropped_columns=(),
-            reasons=(),
-        )
-
-    kept_indices = [index for index in range(len(sanitized.columns)) if index not in drop_reasons]
-    if not kept_indices:
-        return FinalAnswerProjection(
-            answer=sanitized,
-            changed=False,
-            confidence="low",
-            kept_columns=tuple(sanitized.columns),
-            dropped_columns=(),
-            reasons=("projection would remove every column",),
-        )
-
-    projected = AnswerTable(
-        columns=[sanitized.columns[index] for index in kept_indices],
-        rows=[
-            [row[index] for index in kept_indices]
-            for row in sanitized.rows
-            if len(row) == len(sanitized.columns)
-        ],
-    )
-    projected = _deduplicate_answer_rows(projected)
-    return FinalAnswerProjection(
-        answer=projected,
-        changed=True,
-        confidence="high",
-        kept_columns=tuple(projected.columns),
-        dropped_columns=tuple(sanitized.columns[index] for index in sorted(drop_reasons)),
-        reasons=tuple(
-            f"{sanitized.columns[index]}: {drop_reasons[index]}"
-            for index in sorted(drop_reasons)
-        ),
-    )
-
-
-def _projection_report(projection: FinalAnswerProjection) -> dict[str, object]:
-    return {
-        "changed": projection.changed,
-        "confidence": projection.confidence,
-        "kept_columns": list(projection.kept_columns),
-        "dropped_columns": list(projection.dropped_columns),
-        "reasons": list(projection.reasons),
-    }
-
-
 def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None:
     if payload.get("action") == "answer" and isinstance(payload.get("action_input"), dict):
         payload = payload["action_input"]
@@ -936,9 +756,9 @@ def _build_difficulty_final_answer_reminder(task: PublicTask, state: AgentRuntim
             "- Submit only the columns directly requested by the question.",
             "- If multiple rows match the entity/filter, include all final rows; do not keep only the first row.",
             "- Remove helper/debug/join-key/source columns unless the question asks for them.",
-            "- For similar fields such as rank/position, number/id, or date/datetime, verify the field meaning in the data before submitting.",
-            "- If the question has date/month/year wording, verify the observed encoded value format before submitting.",
-            "- If the question asks for a percentage, ratio, average, or rate, verify the denominator/unit and return that computed metric, not a raw count.",
+            "- If multiple fields look plausible, verify their observed values and roles before choosing one.",
+            "- Keep fields used only for filtering, joining, grouping, sorting, or checking out of the final answer unless requested.",
+            "- If a calculation is required, verify the source columns and operation with compact observed data before submitting.",
             "- If the final answer has more than 20 rows, do not hand-write the full Answer JSON; run Python and print `FINAL_TABLE_JSON:` instead.",
         ]
     )
@@ -1901,7 +1721,7 @@ def _candidate_answer_from_step(task: PublicTask, step: StepRecord) -> AnswerTab
     answer = _answer_table_from_payload(payload)
     if answer is None:
         return None
-    return _project_final_answer(task, answer).answer
+    return _sanitize_answer_table(task, answer)
 
 
 def _latest_submission_ready_candidate(
@@ -2504,8 +2324,8 @@ class ReActAgent:
             instructions.append(
                 "Final focused attempt: do not submit a guess. Run at most one compact script that verifies the "
                 "exact requested operation and prints `FINAL_TABLE_JSON:` only if the table is exact. "
-                "For 'how many times', compute a ratio, not a count. For percentage questions, return a percentage. "
-                "For normal/abnormal wording, verify the threshold source before finalizing."
+                "Confirm the source map for output fields, filters, joins, grouping or sorting keys, calculations, "
+                "and row grain before finalizing."
             )
         if not instructions:
             return None
@@ -2529,10 +2349,7 @@ class ReActAgent:
         answer = _answer_table_from_payload(payload)
         if answer is None:
             return None
-        projection = _project_final_answer(task, answer)
-        if projection.changed:
-            content["final_answer_projection"] = _projection_report(projection)
-        return projection.answer
+        return _sanitize_answer_table(task, answer)
 
     def _sanitize_model_step(self, task: PublicTask, model_step: ModelStep) -> ModelStep:
         if model_step.action != "answer":
@@ -2540,7 +2357,7 @@ class ReActAgent:
         answer = _answer_table_from_payload(model_step.action_input)
         if answer is None:
             return model_step
-        sanitized = _project_final_answer(task, answer).answer
+        sanitized = _sanitize_answer_table(task, answer)
         return ModelStep(
             thought=model_step.thought,
             action=model_step.action,
@@ -2787,7 +2604,7 @@ class ReActAgent:
                         break
                 if tool_result.is_terminal:
                     state.answer = (
-                        _project_final_answer(task, tool_result.answer).answer
+                        _sanitize_answer_table(task, tool_result.answer)
                         if tool_result.answer is not None
                         else None
                     )
