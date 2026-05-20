@@ -911,8 +911,14 @@ def test_planning_snapshot_includes_evidence_ledger() -> None:
         assert planning_instruction is not None
         assert planning_snapshot is not None
         evidence_ids = {item["id"] for item in planning_snapshot["evidence_ledger"]}
-        assert {"concrete_data_source", "numerator_denominator", "format_status_source"} <= evidence_ids
+        assert {
+            "concrete_data_source",
+            "calculation_semantics",
+            "semantic_rule_or_threshold",
+            "markdown_context_mapping",
+        } <= evidence_ids
         assert "Evidence checklist:" in planning_instruction
+        assert "EVIDENCE_LEDGER_JSON" in planning_instruction
 
 
 def test_loop_guard_warns_after_repeated_python_execution() -> None:

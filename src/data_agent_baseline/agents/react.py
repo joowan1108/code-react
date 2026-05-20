@@ -43,9 +43,21 @@ FINAL_RESULT_MARKERS = (
     "FINAL_RESULT:",
     "ANSWER_CANDIDATE:",
 )
+EVIDENCE_LEDGER_MARKERS = (
+    "EVIDENCE_LEDGER_JSON:",
+    "EVIDENCE_LEDGER:",
+)
 
 PLANNING_DIFFICULTIES = {"medium", "hard", "extreme"}
 LINKING_REQUIREMENT_DIFFICULTIES = {"hard", "extreme"}
+SPECIAL_EVIDENCE_IDS = {
+    "value_entity_linking",
+    "semantic_rule_or_threshold",
+    "calculation_semantics",
+    "temporal_scope",
+    "numeric_filter_semantics",
+    "markdown_context_mapping",
+}
 
 PLANNING_NODES = (
     (
@@ -265,6 +277,22 @@ def _load_first_json_object(text: str) -> dict[str, object]:
         if isinstance(payload, dict):
             return payload
     raise ValueError("No JSON object found.")
+
+
+def _load_first_json_value(text: str) -> object:
+    json_fence = re.search(r"```json\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    candidate = json_fence.group(1).strip() if json_fence is not None else text.strip()
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(candidate):
+        if character not in "{[":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(candidate[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, (dict, list)):
+            return payload
+    raise ValueError("No JSON object or array found.")
 
 
 def _extract_answer_step(raw_response: str) -> ModelStep | None:
@@ -748,6 +776,23 @@ def _find_marker_payload(text: str, markers: tuple[str, ...]) -> dict[str, objec
         return None
 
 
+def _find_marker_json_value(text: str, markers: tuple[str, ...]) -> object | None:
+    lower_text = text.lower()
+    marker_matches = [
+        (lower_text.find(marker.lower()), marker)
+        for marker in markers
+        if lower_text.find(marker.lower()) >= 0
+    ]
+    if not marker_matches:
+        return None
+    marker_index, marker = min(marker_matches, key=lambda item: item[0])
+    marker_end = marker_index + len(marker)
+    try:
+        return _load_first_json_value(text[marker_end:])
+    except ValueError:
+        return None
+
+
 def _candidate_decision_from_observation(
     task: PublicTask,
     observation: dict[str, object],
@@ -776,6 +821,9 @@ def _candidate_decision_from_observation(
     if answer_warnings:
         reasons.append("final_answer_check_warnings_present")
         hard_reasons.append("final_answer_check_warnings_present")
+    if content_dict.get("candidate_review_instruction"):
+        reasons.append("candidate_review_required")
+        hard_reasons.append("candidate_review_required")
     if len(answer.rows) <= 20:
         reasons.append("small_candidate_requires_model_review")
         hard_reasons.append("small_candidate_requires_model_review")
@@ -1109,82 +1157,350 @@ def _loop_guard_summary(state: AgentRuntimeState) -> dict[str, object]:
     return summary
 
 
-def _evidence_requirement_status(all_text: str, keywords: tuple[str, ...]) -> str:
-    return "maybe_found" if any(keyword in all_text for keyword in keywords) else "needs_evidence"
+QUESTION_TERM_STOPWORDS = {
+    "about",
+    "after",
+    "among",
+    "and",
+    "answer",
+    "are",
+    "average",
+    "before",
+    "between",
+    "by",
+    "calculate",
+    "column",
+    "columns",
+    "count",
+    "does",
+    "each",
+    "find",
+    "for",
+    "from",
+    "give",
+    "has",
+    "have",
+    "highest",
+    "how",
+    "include",
+    "into",
+    "list",
+    "lowest",
+    "many",
+    "max",
+    "mean",
+    "min",
+    "much",
+    "name",
+    "number",
+    "only",
+    "per",
+    "please",
+    "provide",
+    "ratio",
+    "return",
+    "rows",
+    "show",
+    "table",
+    "than",
+    "that",
+    "the",
+    "their",
+    "these",
+    "this",
+    "times",
+    "total",
+    "value",
+    "values",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+}
 
 
-def _task_evidence_ledger(task: PublicTask, state: AgentRuntimeState) -> list[dict[str, object]]:
+def _ordered_unique_strings(values: list[str], *, max_items: int = 8) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        normalized = re.sub(r"\s+", " ", value).strip()
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(normalized)
+        if len(unique) >= max_items:
+            break
+    return unique
+
+
+def _quoted_question_terms(question: str) -> list[str]:
+    terms = [
+        match.group(1) or match.group(2)
+        for match in re.finditer(r'"([^"]+)"|\'([^\']+)\'', question)
+    ]
+    return _ordered_unique_strings(terms, max_items=8)
+
+
+def _capitalized_question_terms(question: str) -> list[str]:
+    terms = re.findall(
+        r"\b[A-Z][A-Za-z0-9]*(?:[-\s]+[A-Z][A-Za-z0-9]*)*\b",
+        question,
+    )
+    filtered = [
+        term
+        for term in terms
+        if len(term) >= 3 and term.casefold() not in QUESTION_TERM_STOPWORDS
+    ]
+    return _ordered_unique_strings(filtered, max_items=8)
+
+
+def _domain_question_terms(question: str) -> list[str]:
+    terms = [
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", question)
+        if token.casefold() not in QUESTION_TERM_STOPWORDS
+    ]
+    return _ordered_unique_strings(terms, max_items=10)
+
+
+def _numeric_question_terms(question: str) -> list[str]:
+    return _ordered_unique_strings(re.findall(r"[-+]?\d+(?:\.\d+)?%?", question), max_items=8)
+
+
+def _question_terms_for_evidence(task: PublicTask) -> list[str]:
+    return _ordered_unique_strings(
+        _quoted_question_terms(task.question)
+        + _capitalized_question_terms(task.question)
+        + _domain_question_terms(task.question)
+        + _numeric_question_terms(task.question),
+        max_items=12,
+    )
+
+
+def _evidence_entries_from_value(value: object) -> list[dict[str, object]]:
+    if isinstance(value, dict):
+        for key in ("items", "evidence", "ledger", "entries"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                return [item for item in nested if isinstance(item, dict)]
+        if any(key in value for key in ("id", "status", "claim", "source", "evidence")):
+            return [value]
+        return []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _evidence_entries_from_state(state: AgentRuntimeState) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for step in state.steps:
+        content = step.observation.get("content")
+        if not isinstance(content, dict):
+            continue
+        entries.extend(_evidence_entries_from_value(content.get("evidence_ledger_report")))
+    return entries
+
+
+def _evidence_entry_is_verified(entry: dict[str, object]) -> bool:
+    if entry.get("verified") is True or entry.get("ok") is True:
+        return True
+    status = str(entry.get("status") or "").casefold()
+    return status in {"verified", "grounded", "found", "satisfied", "done", "ok", "true"}
+
+
+def _evidence_entry_matches(entry: dict[str, object], requirement_id: str) -> bool:
+    labels = [
+        entry.get("id"),
+        entry.get("requirement_id"),
+        entry.get("requirement"),
+        entry.get("type"),
+        entry.get("kind"),
+        entry.get("evidence_type"),
+    ]
+    normalized = {str(label).casefold() for label in labels if label}
+    return requirement_id.casefold() in normalized
+
+
+def _evidence_requirement_status(
+    all_text: str,
+    requirement_id: str,
+    keywords: tuple[str, ...],
+    evidence_entries: list[dict[str, object]],
+) -> str:
+    if any(
+        _evidence_entry_matches(entry, requirement_id) and _evidence_entry_is_verified(entry)
+        for entry in evidence_entries
+    ):
+        return "verified"
+    if any(keyword in all_text for keyword in keywords):
+        return "maybe_found"
+    return "needs_evidence"
+
+
+def _task_evidence_ledger(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    *,
+    extra_evidence_entries: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     question = task.question.casefold()
     tokens = _split_identifier_tokens(task.question)
     all_text = "\n".join(_step_text_for_planning(step) for step in state.steps)
-    requirements: list[tuple[str, str, tuple[str, ...]]] = [
+    evidence_entries = _evidence_entries_from_state(state)
+    if extra_evidence_entries:
+        evidence_entries = [*evidence_entries, *extra_evidence_entries]
+    question_terms = _question_terms_for_evidence(task)
+    requirements: list[dict[str, object]] = [
         (
-            "concrete_data_source",
-            "Identify the actual file/table/markdown record source for every requested concept; do not rely on schema-only assumptions.",
-            ("columns", "tables", "files in directory", "link result", "json/", "csv/", "db/", "doc/"),
+            {
+                "id": "concrete_data_source",
+                "question_terms": question_terms,
+                "instruction": (
+                    "Map each important question term to an observed file/table/column/value or markdown record; "
+                    "do not rely on schema-only assumptions."
+                ),
+                "accepted_sources": ["manifest schema", "CSV/JSON/SQLite samples", "markdown records/rules"],
+                "keywords": ("columns", "tables", "files in directory", "link result", "json/", "csv/", "db/", "doc/"),
+            }
         ),
-        (
-            "final_answer_shape",
-            "Know the exact final columns and whether the answer is one value, rows, count, percentage, or ratio.",
-            ("final_table_json", "answer_candidate", "final answer", "columns", "row_count"),
-        ),
+        {
+            "id": "row_grain",
+            "question_terms": question_terms,
+            "instruction": "State what one final row represents before joins, filters, or grouping.",
+            "accepted_sources": ["question wording", "selected tables", "grouping keys"],
+            "keywords": ("row grain", "one row", "groupby", "group by", "distinct", "per "),
+        },
+        {
+            "id": "final_answer_shape",
+            "question_terms": question_terms,
+            "instruction": (
+                "Know the exact final columns and whether the answer is one value, rows, count, percentage, or ratio."
+            ),
+            "accepted_sources": ["question wording", "computed final table"],
+            "keywords": ("final_table_json", "answer_candidate", "final answer", "columns", "row_count"),
+        },
     ]
-    if tokens & {"percentage", "percent", "ratio", "proportion"} or "how many times" in question:
+    if (
+        tokens & {"percentage", "percent", "ratio", "proportion", "average", "avg", "mean", "rate"}
+        or "how many times" in question
+        or "how much" in question
+    ):
         requirements.append(
-            (
-                "numerator_denominator",
-                "Define the numerator and denominator from grounded records before computing the percentage/ratio.",
-                ("numerator", "denominator", "percentage", "ratio", "total count", "count of"),
-            )
+            {
+                "id": "calculation_semantics",
+                "question_terms": sorted(tokens & {"percentage", "percent", "ratio", "proportion", "average", "avg", "mean", "rate"}),
+                "instruction": (
+                    "Define the formula, numerator/denominator or unit conversion from grounded records before computing."
+                ),
+                "accepted_sources": ["question wording", "schema/sample values", "markdown formula/rule"],
+                "keywords": ("numerator", "denominator", "percentage", "ratio", "average", "unit conversion", "total count"),
+            }
         )
-    if "between" in tokens or re.search(r"\b\d+(?:\.\d+)?\s*(?:to|-)\s*\d+(?:\.\d+)?\b", question):
+    numeric_terms = _numeric_question_terms(task.question)
+    if numeric_terms or "between" in tokens or re.search(r"\b\d+(?:\.\d+)?\s*(?:to|-)\s*\d+(?:\.\d+)?\b", question):
         requirements.append(
-            (
-                "numeric_boundaries",
-                "Map numeric bounds to a real column and apply inclusive/exclusive semantics from the question.",
-                ("between", ">=", "<=", "numeric_filters", "height", "age", "boundary"),
-            )
+            {
+                "id": "numeric_filter_semantics",
+                "question_terms": numeric_terms,
+                "instruction": "Map every numeric value or bound to a real column and apply the question's inclusive/exclusive wording.",
+                "accepted_sources": ["question wording", "column samples", "markdown threshold/range"],
+                "keywords": ("between", ">=", "<=", "numeric_filters", "boundary", "threshold", "range"),
+            }
         )
-    if tokens & {"abnormal", "normal", "threshold", "range", "severe", "legal", "status"}:
+    if tokens & {"abnormal", "normal", "threshold", "range", "severe", "legal", "status", "diagnosis", "disease", "code", "coded"}:
         requirements.append(
-            (
-                "rule_or_threshold",
-                "Find the concrete rule, coded value, threshold, or status definition in data/markdown before filtering.",
-                ("threshold", "normal range", "upper limit", "abnormal", "legal status", "coded", "severity"),
-            )
+            {
+                "id": "semantic_rule_or_threshold",
+                "question_terms": sorted(tokens & {"abnormal", "normal", "threshold", "range", "severe", "legal", "status", "diagnosis", "disease", "code", "coded"}),
+                "instruction": "Find the concrete rule, coded value, threshold, or status definition before filtering.",
+                "accepted_sources": ["structured code/value table", "markdown rule", "observed values"],
+                "keywords": ("threshold", "normal range", "upper limit", "abnormal", "legal", "coded", "severity", "diagnosis"),
+            }
         )
-    if tokens & {"age", "under", "yet"} or "70" in question:
+    if (
+        _quoted_question_terms(task.question)
+        or _capitalized_question_terms(task.question)
+        or tokens & {"named", "called", "label", "category", "type", "class", "entity", "record"}
+    ):
         requirements.append(
-            (
-                "age_reference",
-                "Ground age logic in patient birth/date records and the question's reference date, not a guessed current date.",
-                ("birthday", "birth", "age", "70", "years old", "not yet"),
-            )
+            {
+                "id": "value_entity_linking",
+                "question_terms": _ordered_unique_strings(
+                    _quoted_question_terms(task.question) + _capitalized_question_terms(task.question),
+                    max_items=10,
+                )
+                or question_terms,
+                "instruction": "Link named entities, quoted strings, labels, or categories to exact observed values before filtering.",
+                "accepted_sources": ["database value samples", "link_question_to_data output", "markdown records"],
+                "keywords": ("value_matches", "usable_filter", "row_ids", "matched", "exact value", "link result"),
+            }
         )
-    if tokens & {"format", "commander", "legal", "status"}:
+    if tokens & {"date", "month", "monthly", "year", "yearly", "day", "before", "after", "between"}:
         requirements.append(
-            (
-                "format_status_source",
-                "If format/status columns are absent from SQLite/CSV, treat markdown legality records as the data source and parse card IDs/status.",
-                ("legalities", "format", "commander", "cards_id", "status", "legal"),
-            )
+            {
+                "id": "temporal_scope",
+                "question_terms": sorted(tokens & {"date", "month", "monthly", "year", "yearly", "day", "before", "after", "between"}),
+                "instruction": "Verify the observed date encoding and the exact temporal scope before filtering.",
+                "accepted_sources": ["date column samples", "derived year/month columns", "markdown date rule"],
+                "keywords": ("yyyy", "yyyy-mm-dd", "yyyymm", "to_datetime", "date encoding", "year", "month"),
+            }
         )
     if _task_has_markdown(task):
         requirements.append(
-            (
-                "markdown_record_strategy",
-                "For facts stored only in .md, parse record-level snippets and keep IDs/values from the same record together.",
-                ("extract_markdown_records", "search_markdown", "doc/", "snippet", "record", "paragraph"),
-            )
+            {
+                "id": "markdown_context_mapping",
+                "question_terms": question_terms,
+                "instruction": (
+                    "If a needed fact lives in .md, extract compact record/rule evidence and map it back to structured IDs, "
+                    "columns, or final rows before computing."
+                ),
+                "accepted_sources": ["retrieve_knowledge", "search_markdown", "extract_markdown_records", "link_question_to_data"],
+                "keywords": ("retrieve_knowledge", "extract_markdown_records", "search_markdown", "doc/", "snippet", "record", "paragraph"),
+            }
         )
 
     return [
         {
-            "id": requirement_id,
-            "status": _evidence_requirement_status(all_text, keywords),
-            "instruction": instruction,
+            "id": str(requirement["id"]),
+            "status": _evidence_requirement_status(
+                all_text,
+                str(requirement["id"]),
+                tuple(str(keyword) for keyword in requirement["keywords"]),
+                evidence_entries,
+            ),
+            "question_terms": list(requirement["question_terms"]),
+            "accepted_sources": list(requirement["accepted_sources"]),
+            "instruction": str(requirement["instruction"]),
         }
-        for requirement_id, instruction, keywords in requirements
+        for requirement in requirements
+    ]
+
+
+def _missing_special_evidence_ids(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    *,
+    current_content: dict[str, object] | None = None,
+) -> list[str]:
+    if not _task_uses_advanced_planning(task):
+        return []
+    extra_entries: list[dict[str, object]] = []
+    if current_content is not None:
+        extra_entries = _evidence_entries_from_value(current_content.get("evidence_ledger_report"))
+    return [
+        str(item["id"])
+        for item in _task_evidence_ledger(
+            task,
+            state,
+            extra_evidence_entries=extra_entries,
+        )
+        if item.get("id") in SPECIAL_EVIDENCE_IDS and item.get("status") == "needs_evidence"
     ]
 
 
@@ -1610,10 +1926,25 @@ def _build_planning_context(
         )
     lines.append("Evidence checklist:")
     for evidence in evidence_ledger:
+        terms = evidence.get("question_terms")
+        term_text = ""
+        if isinstance(terms, list) and terms:
+            term_text = " terms=[" + ", ".join(str(term) for term in terms[:5]) + "]"
+        accepted_sources = evidence.get("accepted_sources")
+        source_text = ""
+        if isinstance(accepted_sources, list) and accepted_sources:
+            source_text = " sources=[" + "; ".join(str(source) for source in accepted_sources[:3]) + "]"
         lines.append(
             f"- {evidence['id']} status={evidence['status']}: "
-            f"{evidence['instruction']}"
+            f"{evidence['instruction']}{term_text}{source_text}"
         )
+    lines.append(
+        "Evidence ledger protocol: when you resolve schema/value/markdown semantics in Python, print "
+        "`EVIDENCE_LEDGER_JSON:` followed by a compact JSON list. Each item should include "
+        "`id`, `status` (`verified` or `unresolved`), `source`, and the concrete columns/values/rules used. "
+        "Do this before printing `FINAL_TABLE_JSON:` on hard/extreme tasks with ambiguous values, formulas, "
+        "thresholds, or markdown context."
+    )
     lines.extend(BIRD_SEMANTIC_CONTRACT_LINES)
     if loop_guard.get("triggered"):
         lines.append(
@@ -1832,6 +2163,14 @@ class ReActAgent:
                 "`link_question_to_data(max_candidates=5)` before broad markdown search or repeated manual matching. "
                 "Use its `row_ids`, `usable_filter`, `value_matches`, and `join_candidates` to connect question "
                 "mentions or markdown records to actual structured data. You may continue solving in the same script."
+            )
+        missing_special_evidence = _missing_special_evidence_ids(task, state)
+        if state.steps and missing_special_evidence:
+            instructions.append(
+                "Evidence ledger requirement: before finalizing this hard/extreme task, ground these unresolved "
+                f"semantic items with observed data or markdown and print `EVIDENCE_LEDGER_JSON:`: "
+                f"{missing_special_evidence[:4]}. Keep it compact; each item needs id, status, source, "
+                "and concrete columns/values/rules."
             )
         candidate_review_instruction = _latest_candidate_review_instruction(state)
         if candidate_review_instruction:
@@ -2052,6 +2391,13 @@ class ReActAgent:
                     )
                     if repair_hints:
                         content["repair_hints"] = repair_hints
+                    stdout = str(content.get("output") or content.get("stdout") or "")
+                    evidence_value = _find_marker_json_value(stdout, EVIDENCE_LEDGER_MARKERS)
+                    if evidence_value is not None:
+                        evidence_entries = _evidence_entries_from_value(evidence_value)
+                        content["evidence_ledger_report"] = (
+                            evidence_entries if evidence_entries else evidence_value
+                        )
                 elif model_step.action == "answer":
                     direct_answer = _answer_table_from_payload(model_step.action_input)
                     if direct_answer is not None:
@@ -2071,13 +2417,24 @@ class ReActAgent:
                         review_reasons.extend(str(warning) for warning in warnings[:3])
                     if len(candidate_answer.rows) <= 20:
                         review_reasons.append("candidate has <=20 rows, so the model should confirm final shape")
+                    missing_evidence = _missing_special_evidence_ids(
+                        task,
+                        state,
+                        current_content=content,
+                    )
+                    if missing_evidence:
+                        review_reasons.append(
+                            "semantic evidence still needs explicit grounding: "
+                            + ", ".join(missing_evidence[:4])
+                        )
                     if review_reasons:
                         content["candidate_review_instruction"] = (
                             "Runtime final-answer review: Python printed a plausible final table, "
                             "but the runtime is not auto-submitting it. Do not run more exploration just because of this. "
                             "If the candidate columns and rows exactly answer the question, submit `Answer:` "
                             "with that table now. If a warning identifies a real extra/missing column or wrong "
-                            "row shape, submit the corrected table. Candidate preview: "
+                            "row shape, or missing semantic evidence identifies an unresolved mapping/rule, "
+                            "fix that evidence first and submit the corrected table. Candidate preview: "
                             f"{_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
                             "Review reasons: "
                             + "; ".join(review_reasons)
