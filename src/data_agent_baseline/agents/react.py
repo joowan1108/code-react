@@ -634,7 +634,44 @@ def _normalize_verifier_verdict(value: object) -> str:
 
 
 def _parse_verifier_decision(raw_response: str) -> CandidateVerificationDecision:
-    payload = _load_first_json_object(raw_response)
+    try:
+        payload = _load_first_json_object(raw_response)
+    except ValueError:
+        lowered = raw_response.casefold()
+        reject_patterns = (
+            r"\bverdict\s*[:=]\s*reject\b",
+            r"\bdecision\s*[:=]\s*reject\b",
+            r"\breject(?:ed)?\b",
+            r"\bincorrect\b",
+            r"\bwrong\b",
+            r"\bmismatch\b",
+            r"\bnot supported\b",
+            r"\bdoes not match\b",
+            r"\bextra/missing\b",
+        )
+        accept_patterns = (
+            r"\bverdict\s*[:=]\s*accept\b",
+            r"\bdecision\s*[:=]\s*accept\b",
+            r"\baccept(?:ed)?\b",
+            r"\bsupported by\b",
+            r"\bmatches the candidate\b",
+            r"\bcandidate (?:answer )?is correct\b",
+        )
+        verdict = "uncertain"
+        if any(re.search(pattern, lowered) for pattern in reject_patterns):
+            verdict = "reject"
+        elif any(re.search(pattern, lowered) for pattern in accept_patterns):
+            verdict = "accept"
+        return CandidateVerificationDecision(
+            verdict=verdict,
+            reasons=(
+                "verifier returned non-JSON text; parsed by fallback heuristic"
+                if verdict != "uncertain"
+                else "verifier returned no parseable JSON verdict"
+            ,),
+            raw_response=raw_response,
+        )
+
     verdict = _normalize_verifier_verdict(
         payload.get("verdict", payload.get("decision", payload.get("status")))
     )
@@ -719,7 +756,8 @@ def _build_candidate_verifier_messages(
     system_message = (
         "You are an independent verifier for a data-analysis answer candidate. "
         "You do not solve from scratch. Check whether the candidate is directly supported "
-        "by the shown code, execution output, and evidence. Return exactly one JSON object."
+        "by the shown code, execution output, and evidence. Return ONLY one JSON object, "
+        "with no markdown fences and no prose outside JSON."
     )
     user_message = (
         "Verify the candidate answer below.\n"
@@ -728,8 +766,9 @@ def _build_candidate_verifier_messages(
         "Reject when there is a concrete mismatch, traceback, unsupported assumption, extra/missing "
         "final column, wrong formula, or ignored verified evidence. Use uncertain if there is not enough "
         "information to decide.\n\n"
-        "Return JSON with this schema:\n"
+        "Return ONLY JSON with this schema:\n"
         '{"verdict":"accept|reject|uncertain","reasons":["..."],"repair_instruction":"optional next action"}'
+        "\nIf uncertain, still return JSON. Do not write an explanation outside JSON."
         "\n\nVerifier input:\n"
         + _safe_json_dumps(verifier_input)
     )
@@ -955,11 +994,11 @@ def _candidate_decision_from_observation(
         reasons.append("single_value_question_requires_one_cell_answer")
         hard_reasons.append("single_value_question_requires_one_cell_answer")
 
+    verifier_verdict = _content_verifier_verdict(content_dict)
     answer_warnings = _final_answer_check_warnings(task, answer)
-    if answer_warnings:
+    if answer_warnings and verifier_verdict != "accept":
         reasons.append("final_answer_check_warnings_present")
         hard_reasons.append("final_answer_check_warnings_present")
-    verifier_verdict = _content_verifier_verdict(content_dict)
     if content_dict.get("verifier_rejected") or verifier_verdict == "reject":
         reasons.append("independent_verifier_rejected")
         hard_reasons.append("independent_verifier_rejected")
@@ -2779,9 +2818,10 @@ class ReActAgent:
                     final_answer_check = _final_answer_check(task, candidate_answer)
                     content["final_answer_check"] = final_answer_check
                     warnings = final_answer_check.get("warnings", [])
-                    review_reasons: list[str] = []
+                    warning_reasons: list[str] = []
                     if isinstance(warnings, list) and warnings:
-                        review_reasons.extend(str(warning) for warning in warnings[:3])
+                        warning_reasons.extend(str(warning) for warning in warnings[:3])
+                    review_reasons: list[str] = []
                     missing_evidence = _missing_special_evidence_ids(
                         task,
                         state,
@@ -2803,10 +2843,7 @@ class ReActAgent:
                         content["evidence_consistency_resolved"] = True
 
                     verifier_decision = None
-                    if (
-                        tool_result.ok
-                        and not review_reasons
-                    ):
+                    if tool_result.ok:
                         verifier_decision = self._verify_candidate_answer(
                             task,
                             model_step,
@@ -2821,16 +2858,13 @@ class ReActAgent:
                                 "independent verifier rejected candidate: "
                                 + "; ".join(verifier_decision.reasons[:3])
                             )
-                        elif verifier_decision.verdict == "uncertain":
-                            review_reasons.append(
-                                "independent verifier was uncertain: "
-                                + "; ".join(verifier_decision.reasons[:3])
-                            )
                     verifier_verdict = (
                         verifier_decision.verdict
                         if verifier_decision is not None
                         else _content_verifier_verdict(content)
                     )
+                    if warning_reasons and verifier_verdict != "accept":
+                        review_reasons.extend(warning_reasons)
                     if len(candidate_answer.rows) <= 20 and verifier_verdict != "accept":
                         review_reasons.append("candidate has <=20 rows, so the model should confirm final shape")
                     if review_reasons:

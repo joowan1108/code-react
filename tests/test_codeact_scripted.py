@@ -1070,6 +1070,38 @@ def test_independent_verifier_accepts_small_candidate_without_extra_review() -> 
         assert "small_candidate_requires_model_review" not in decision.reasons
 
 
+def test_independent_verifier_accept_can_override_final_warning() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_verifier_warning_accept",
+                difficulty="hard",
+                question="List the school names.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = AnswerTable(columns=["School Name", "debug_score"], rows=[["A", 0.9]])
+        decision = _candidate_decision_from_observation(
+            task,
+            {
+                "ok": True,
+                "tool": "execute_python",
+                "content": {
+                    "output": "",
+                    "independent_verifier": {
+                        "verdict": "accept",
+                        "reasons": ["debug_score is explicitly requested by this task context"],
+                    },
+                },
+            },
+            answer,
+        )
+
+        assert decision.auto_submit is True
+        assert "final_answer_check_warnings_present" not in decision.reasons
+
+
 def test_parse_independent_verifier_decision() -> None:
     decision = _parse_verifier_decision(
         "```json\n"
@@ -1080,6 +1112,15 @@ def test_parse_independent_verifier_decision() -> None:
     assert decision.verdict == "reject"
     assert decision.reasons == ("wrong denominator",)
     assert decision.repair_instruction == "recompute ratio"
+
+
+def test_parse_independent_verifier_non_json_fallback() -> None:
+    decision = _parse_verifier_decision(
+        "I would reject this candidate because the denominator does not match the question."
+    )
+
+    assert decision.verdict == "reject"
+    assert "fallback heuristic" in decision.reasons[0]
 
 
 def test_loop_guard_warns_after_repeated_python_execution() -> None:
