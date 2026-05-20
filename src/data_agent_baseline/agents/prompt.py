@@ -41,9 +41,10 @@ Operational rules:
 11. Once the exact final result exists, submit it immediately; the runtime may submit `FINAL_TABLE_JSON` directly.
 12. For SQLite tasks, use exact table/column names from the manifest's sqlite_master and PRAGMA schema; do not invent table, column, or join names.
 13. If the question mentions a concept that is not present as a real table, column, or observed record value, do not assume its meaning. First find the concrete data source that implements it; if it only appears in markdown, map it back to real columns/records before computing.
-14. For JSON files, prefer direct `load_json_table("json/name.json")` or `load_json_records("json/name.json")` calls; these helpers unwrap common `{table, records}` JSON wrappers.
-15. Use direct markdown helper calls only as a fallback when structured files do not contain the requested rule, linked prose record, threshold, or coded meaning.
-16. If you are unsure how a question mention, markdown record ID, or quoted value connects to structured columns, call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates instead of guessing.
+14. If the manifest includes Markdown-semantic linking hints, prefer exact `symbol -> table.column` links before fuzzy similar columns; verify similar non-exact columns only if the exact link is impossible.
+15. For JSON files, prefer direct `load_json_table("json/name.json")` or `load_json_records("json/name.json")` calls; these helpers unwrap common `{table, records}` JSON wrappers.
+16. Use direct markdown helper calls only as a fallback when structured files do not contain the requested rule, linked prose record, threshold, or coded meaning.
+17. If you are unsure how a question mention, markdown record ID, or quoted value connects to structured columns, call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates instead of guessing.
 
 Format rules:
 1. For Python execution, do not put code inside JSON. Use:
@@ -149,6 +150,8 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "For SQLite files, rely on the manifest's sqlite_master and PRAGMA schema before writing joins. "
             "Do not assume concepts that are absent from the schema; map every requested concept to a real "
             "table, column, or observed record value before computing. "
+            "If the manifest includes Markdown-semantic linking hints, prefer exact `symbol -> table.column` links "
+            "before fuzzy similar columns, and treat similar non-exact columns as candidates to verify rather than defaults. "
             "If a mention, quoted value, markdown ID, or prose rule is hard to connect to columns, call "
             "`link_question_to_data(max_candidates=5)` once for grounded entity/value links before repeating searches. "
             "Use direct markdown helper calls only when structured CSV/JSON/SQLite evidence is missing or a real rule, "

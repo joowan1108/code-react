@@ -1385,8 +1385,34 @@ def test_context_manifest_adds_question_linked_schema_hints() -> None:
         assert "Question-linked schema hints" in manifest
         assert "csv/patients.csv:Creatinine" in manifest
         assert "csv/patients.csv:Age" in manifest
-        assert "knowledge snippets" not in manifest
-        assert "abnormal above 1.3" not in manifest
+        assert "Markdown-semantic linking hints" in manifest
+        assert "Creatinine -> csv/patients.csv:Creatinine" in manifest
+        assert "abnormal above 1.3" in manifest
+
+
+def test_context_manifest_links_markdown_symbols_to_exact_schema_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "csv").mkdir()
+        (context_path / "csv" / "labs.csv").write_text(
+            "ID,IGG,aCL IgG,Symptoms\n1,1200,1.3,AMI\n2,850,4.0,\n",
+            encoding="utf-8",
+        )
+        (context_path / "knowledge.md").write_text(
+            "normal Ig G level refers to IGG > 900 and IGG < 2000; "
+            "have symptoms refers to Symptoms IS NOT NULL;",
+            encoding="utf-8",
+        )
+
+        manifest = build_context_manifest(
+            context_path,
+            question="Among patients with a normal Ig G level, how many have symptoms?",
+        )
+
+        assert "Markdown-semantic linking hints" in manifest
+        assert "IGG -> csv/labs.csv:IGG" in manifest
+        assert "Symptoms -> csv/labs.csv:Symptoms" in manifest
+        assert "IGG also resembles csv/labs.csv:aCL IgG" in manifest
 
 
 def test_context_manifest_links_quoted_values_to_columns() -> None:

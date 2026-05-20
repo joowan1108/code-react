@@ -13,12 +13,16 @@ MAX_COLUMNS = 28
 MAX_TABLES = 20
 MAX_FOREIGN_KEYS = 20
 MAX_JSON_PARSE_BYTES = 8_000_000
-MAX_SCHEMA_HINT_CHARS = 1000
+MAX_SCHEMA_HINT_CHARS = 1800
 MAX_HINT_COLUMNS = 8
 MAX_HINT_TABLES = 5
 MAX_HINT_VALUES = 4
 MAX_HINT_JOINS = 4
 MAX_VALUE_SCAN_ROWS = 5000
+MAX_MARKDOWN_HINT_SNIPPETS = 3
+MAX_MARKDOWN_LINKS = 8
+MAX_MARKDOWN_ALTERNATIVES = 4
+MAX_MARKDOWN_HINT_CHARS = 1400
 
 STOPWORDS = {
     "a",
@@ -123,6 +127,39 @@ NUMERIC_COLUMN_TERMS = {
     "weight",
 }
 
+SQLISH_STOPWORDS = {
+    "and",
+    "as",
+    "asc",
+    "avg",
+    "by",
+    "case",
+    "count",
+    "desc",
+    "distinct",
+    "else",
+    "end",
+    "from",
+    "group",
+    "having",
+    "in",
+    "is",
+    "join",
+    "like",
+    "max",
+    "min",
+    "not",
+    "null",
+    "on",
+    "or",
+    "order",
+    "select",
+    "sum",
+    "then",
+    "when",
+    "where",
+}
+
 
 def _relative_path(path: Path, root: Path) -> str:
     try:
@@ -194,6 +231,15 @@ def _tokenize_for_linking(text: str) -> set[str]:
             expanded.add(token[:-1])
         expanded.update(TOKEN_SYNONYMS.get(token, set()))
     return expanded
+
+
+def _compact_identifier(text: str) -> str:
+    return "".join(re.findall(r"[a-z0-9]+", str(text).casefold()))
+
+
+def _identifier_words(text: str) -> list[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(text))
+    return re.findall(r"[A-Za-z0-9]+", spaced.replace("_", " "))
 
 
 def _question_terms(question: str) -> set[str]:
@@ -515,6 +561,191 @@ def _overlap_join_edges(info: _SchemaInfo, top_tables: set[str]) -> list[_JoinEd
     return edges
 
 
+def _split_markdown_hint_units(text: str) -> list[str]:
+    units: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip(" \t-")
+        if not line or line.startswith("#"):
+            continue
+        # Keep short rule lines intact, but split long description lines on semicolons.
+        pieces = [line]
+        if len(line) > 180 and ";" in line:
+            pieces = [piece.strip() for piece in line.split(";") if piece.strip()]
+        for piece in pieces:
+            cleaned = re.sub(r"\s+", " ", piece).strip()
+            if cleaned:
+                units.append(cleaned[:320])
+    return units
+
+
+def _markdown_unit_score(unit: str, question: str, query_terms: set[str]) -> float:
+    unit_terms = _tokenize_for_linking(unit)
+    overlap = query_terms & unit_terms
+    if not overlap:
+        return 0.0
+
+    score = float(len(overlap))
+    unit_lower = unit.casefold()
+    question_lower = question.casefold()
+    if any(marker in unit_lower for marker in ("refers to", "means")):
+        score += 2.0
+    elif any(marker in unit_lower for marker in ("normal range", "coded", "rule")) and len(overlap) >= 2:
+        score += 1.5
+    if any(marker in question_lower for marker in ("normal", "abnormal", "range", "status", "percentage", "ratio")):
+        score += 0.5
+    if _compact_identifier(unit) and _compact_identifier(unit) in _compact_identifier(question):
+        score += 0.5
+    return score
+
+
+def _extract_markdown_symbol_terms(unit: str) -> list[str]:
+    symbols: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = value.strip(" `\"'.,;:()[]{}")
+        if not cleaned:
+            return
+        lowered = cleaned.casefold()
+        if lowered in SQLISH_STOPWORDS:
+            return
+        if len(_compact_identifier(cleaned)) < 2:
+            return
+        if cleaned not in symbols:
+            symbols.append(cleaned)
+
+    for match in re.finditer(r"`([^`]+)`", unit):
+        add(match.group(1))
+    for match in re.finditer(r"\b[A-Z][A-Z0-9_-]{1,}\b", unit):
+        add(match.group(0))
+    for match in re.finditer(
+        r"\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){1,3}\b",
+        unit,
+    ):
+        add(match.group(0))
+    return symbols
+
+
+def _markdown_schema_links(
+    units: list[tuple[str, str]],
+    info: _SchemaInfo,
+) -> tuple[list[str], list[_ColumnRef], list[str]]:
+    links: list[str] = []
+    linked_refs: list[_ColumnRef] = []
+    alternatives: list[str] = []
+    seen_links: set[str] = set()
+    seen_refs: set[str] = set()
+    seen_alternatives: set[str] = set()
+
+    column_by_compact: dict[str, list[_ColumnRef]] = {}
+    for ref in info.columns:
+        compact = _compact_identifier(ref.column)
+        if len(compact) >= 2:
+            column_by_compact.setdefault(compact, []).append(ref)
+
+    candidate_symbols: list[str] = []
+    for _, unit in units:
+        candidate_symbols.extend(_extract_markdown_symbol_terms(unit))
+        compact_unit = _compact_identifier(unit)
+        for compact, refs in column_by_compact.items():
+            if len(compact) < 3:
+                continue
+            if compact in compact_unit and any(
+                token in _tokenize_for_linking(unit) for token in refs[0].tokens
+            ):
+                candidate_symbols.append(refs[0].column)
+
+    for symbol in candidate_symbols:
+        compact_symbol = _compact_identifier(symbol)
+        if not compact_symbol:
+            continue
+        exact_refs = column_by_compact.get(compact_symbol, [])
+        if not exact_refs:
+            continue
+        labels = [ref.label for ref in exact_refs[:3]]
+        link_text = f"{symbol} -> {', '.join(labels)}"
+        if link_text not in seen_links:
+            seen_links.add(link_text)
+            links.append(link_text)
+        for ref in exact_refs:
+            if ref.label not in seen_refs:
+                seen_refs.add(ref.label)
+                linked_refs.append(ref)
+            if len(compact_symbol) < 3 or compact_symbol in {"id"}:
+                continue
+            similar = [
+                other
+                for other in info.columns
+                if other.label != ref.label
+                and _compact_identifier(other.column) != compact_symbol
+                and compact_symbol in _compact_identifier(other.column)
+            ]
+            if similar:
+                rendered = f"{ref.column} also resembles {', '.join(other.label for other in similar[:2])}"
+                if rendered not in seen_alternatives:
+                    seen_alternatives.add(rendered)
+                    alternatives.append(rendered)
+        if len(links) >= MAX_MARKDOWN_LINKS:
+            break
+
+    return links[:MAX_MARKDOWN_LINKS], linked_refs[:MAX_MARKDOWN_LINKS], alternatives[:MAX_MARKDOWN_ALTERNATIVES]
+
+
+def _markdown_semantic_hints(
+    root: Path,
+    files: list[Path],
+    question: str,
+    info: _SchemaInfo,
+    query_terms: set[str],
+) -> tuple[list[str], list[_ColumnRef]]:
+    scored_units: list[tuple[float, str, str]] = []
+    for path in files[:MAX_FILES]:
+        if path.suffix.casefold() not in {".md", ".txt"}:
+            continue
+        rel_path = _relative_path(path, root)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")[:160_000]
+        except Exception:  # noqa: BLE001
+            continue
+        for unit in _split_markdown_hint_units(text):
+            score = _markdown_unit_score(unit, question, query_terms)
+            if score < 1.5:
+                continue
+            scored_units.append((score, rel_path, unit))
+
+    if not scored_units:
+        return [], []
+
+    selected: list[tuple[str, str]] = []
+    seen_units: set[str] = set()
+    for _, rel_path, unit in sorted(scored_units, key=lambda item: (-item[0], item[1], item[2])):
+        key = unit.casefold()
+        if key in seen_units:
+            continue
+        seen_units.add(key)
+        selected.append((rel_path, unit))
+        if len(selected) >= MAX_MARKDOWN_HINT_SNIPPETS:
+            break
+
+    links, linked_refs, alternatives = _markdown_schema_links(selected, info)
+    lines = ["Markdown-semantic linking hints (compact; verify exact columns before computing):"]
+    if links:
+        lines.append(f"- markdown-mentioned schema links: {_trim_items(links, max_items=MAX_MARKDOWN_LINKS)}")
+    if alternatives:
+        lines.append(
+            "- similar non-exact columns to distinguish: "
+            + _trim_items(alternatives, max_items=MAX_MARKDOWN_ALTERNATIVES)
+        )
+    rendered_units = [f"{rel_path}: {unit}" for rel_path, unit in selected]
+    if rendered_units:
+        lines.append(f"- relevant markdown rules: {_trim_items(rendered_units, max_items=MAX_MARKDOWN_HINT_SNIPPETS)}")
+
+    rendered = "\n".join(lines)
+    if len(rendered) <= MAX_MARKDOWN_HINT_CHARS:
+        return lines, linked_refs
+    trimmed = rendered[:MAX_MARKDOWN_HINT_CHARS].rsplit("\n", 1)[0]
+    return [*trimmed.splitlines(), "[markdown-semantic hints truncated]"], linked_refs
+
+
 def _question_linked_schema_hints(root: Path, files: list[Path], question: str | None) -> list[str]:
     if not question:
         return []
@@ -530,6 +761,15 @@ def _question_linked_schema_hints(root: Path, files: list[Path], question: str |
     value_matches = _find_value_matches(root, files, info, _quoted_values(question))
     for _, ref in value_matches:
         scores[ref] = scores.get(ref, 0.0) + 6.0
+    markdown_hint_lines, markdown_linked_refs = _markdown_semantic_hints(
+        root,
+        files,
+        question,
+        info,
+        query_terms,
+    )
+    for ref in markdown_linked_refs:
+        scores[ref] = scores.get(ref, 0.0) + 8.0
 
     ranked_columns = sorted(
         [ref for ref, score in scores.items() if score > 0],
@@ -565,6 +805,7 @@ def _question_linked_schema_hints(root: Path, files: list[Path], question: str |
         lines.append(f"- quoted value matches: {_trim_items(rendered_values, max_items=MAX_HINT_VALUES)}")
     if join_edges:
         lines.append(f"- possible joins: {_trim_items([edge.label for edge in join_edges], max_items=MAX_HINT_JOINS)}")
+    lines.extend(markdown_hint_lines)
 
     rendered = "\n".join(lines)
     if len(rendered) <= MAX_SCHEMA_HINT_CHARS:
