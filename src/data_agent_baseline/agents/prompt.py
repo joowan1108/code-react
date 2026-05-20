@@ -286,7 +286,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If a question concept is not present in the schema, do not invent or assume it; find the concrete "
             "column/table/record or markdown rule that implements it, then verify it against observed data. "
-            "Before computing, ground BIRD-style semantics: for date/month/year filters inspect observed date encodings; "
+            "Before computing, ground structured-data semantics: for date/month/year filters inspect observed date encodings; "
             "for percentage/ratio/rate questions identify numerator and denominator; for average monthly/yearly wording "
             "check unit conversion; for normal/abnormal/range/status wording find the threshold or coded meaning. "
             "When the final connection between question terms, markdown record IDs, and real columns is unclear, "

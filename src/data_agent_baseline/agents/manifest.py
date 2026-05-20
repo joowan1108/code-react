@@ -66,12 +66,8 @@ TOKEN_SYNONYMS = {
     "age": {"year", "years", "old"},
     "amount": {"budget", "cost", "expense", "price", "spend"},
     "budget": {"amount", "cost", "expense", "price"},
-    "comic": {"comics"},
-    "comics": {"comic"},
     "cost": {"amount", "budget", "expense", "price"},
     "event": {"meeting"},
-    "heroes": {"hero", "superhero"},
-    "hero": {"heroes", "superhero"},
     "meeting": {"event"},
     "percent": {"percentage", "proportion", "rate", "ratio"},
     "percentage": {"percent", "proportion", "rate", "ratio"},
@@ -80,8 +76,6 @@ TOKEN_SYNONYMS = {
     "publisher": {"published"},
     "ratio": {"percentage", "proportion", "rate"},
     "revenue": {"amount", "sales", "total"},
-    "size": {"shirt", "tshirt", "t-shirt"},
-    "superhero": {"hero", "heroes"},
     "total": {"amount", "sum"},
 }
 
@@ -226,11 +220,25 @@ def _tokenize_for_linking(text: str) -> set[str]:
     }
     expanded: set[str] = set()
     for token in tokens:
-        expanded.add(token)
-        if len(token) > 3 and token.endswith("s"):
-            expanded.add(token[:-1])
-        expanded.update(TOKEN_SYNONYMS.get(token, set()))
+        for variant in _token_variants(token):
+            expanded.add(variant)
+            expanded.update(TOKEN_SYNONYMS.get(variant, set()))
     return expanded
+
+
+def _token_variants(token: str) -> set[str]:
+    variants = {token}
+    if len(token) <= 3:
+        return variants
+    if token.endswith("ies") and len(token) > 4:
+        variants.add(f"{token[:-3]}y")
+    if token.endswith(("ches", "shes", "sses", "xes", "zes", "oes")) and len(token) > 4:
+        variants.add(token[:-2])
+    if token.endswith("s"):
+        variants.add(token[:-1])
+    if token.endswith("ed") and len(token) > 4:
+        variants.add(token[:-2])
+    return variants
 
 
 def _compact_identifier(text: str) -> str:

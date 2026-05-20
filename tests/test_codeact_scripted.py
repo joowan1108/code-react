@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from data_agent_baseline.agents.model import ScriptedModelAdapter
-from data_agent_baseline.agents.manifest import build_context_manifest
+from data_agent_baseline.agents.manifest import build_context_manifest, _tokenize_for_linking
 from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT, build_task_prompt
 from data_agent_baseline.agents.react import (
     ReActAgent,
@@ -16,6 +16,7 @@ from data_agent_baseline.agents.react import (
     _candidate_decision_from_observation,
     _evidence_consistency_warnings,
     _final_answer_check,
+    _project_final_answer,
     _python_repair_hints,
     _render_observation_for_prompt,
     _sanitize_answer_table,
@@ -254,6 +255,93 @@ def test_final_answer_check_warns_about_likely_extra_columns() -> None:
         assert check["question_type"] == "row_list"
         assert check["warnings"]
         assert "debug_score" in check["warnings"][0]
+
+
+def test_project_final_answer_drops_only_definite_metric_helpers() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_percentage_projection",
+                difficulty="medium",
+                question="What percentage of European races were hosted in Germany?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        projection = _project_final_answer(
+            task,
+            AnswerTable(
+                columns=["percentage", "numerator", "denominator", "debug_score"],
+                rows=[[25.0, 5, 20, 0.99]],
+            ),
+        )
+
+        assert projection.changed
+        assert projection.confidence == "high"
+        assert projection.answer.columns == ["percentage"]
+        assert projection.answer.rows == [[25.0]]
+        assert projection.dropped_columns == ("numerator", "denominator", "debug_score")
+
+
+def test_project_final_answer_keeps_ambiguous_entity_metric_columns() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_event_projection",
+                difficulty="easy",
+                question="Which event has the lowest cost?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        projection = _project_final_answer(
+            task,
+            AnswerTable(
+                columns=["event_name", "cost"],
+                rows=[["November Speaker", 6.0]],
+            ),
+        )
+
+        assert not projection.changed
+        assert projection.answer.columns == ["event_name", "cost"]
+
+
+def test_direct_answer_uses_final_answer_projection() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_direct_projection",
+                difficulty="medium",
+                question="What percentage of European races were hosted in Germany?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        agent = ReActAgent(
+            model=ScriptedModelAdapter(
+                [
+                    _answer_response(
+                        "The computed metric is ready.",
+                        {
+                            "columns": ["percentage", "numerator", "denominator", "debug_score"],
+                            "rows": [[25.0, 5, 20, 0.99]],
+                        },
+                    ),
+                ]
+            ),
+            tools=create_default_tool_registry(),
+            config=ReActAgentConfig(max_steps=1),
+            system_prompt=CODEACT_REACT_SYSTEM_PROMPT,
+            prompt_tool_names=("answer",),
+        )
+
+        result = agent.run(task)
+
+        assert result.answer is not None
+        assert result.answer.columns == ["percentage"]
+        assert result.answer.rows == [[25.0]]
 
 
 def test_sanitize_answer_keeps_obvious_single_target_helper_columns() -> None:
@@ -588,7 +676,7 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
         assert "schema_linking" in messages[1].content
         assert "target_columns" in messages[1].content
         assert "answer_submission" in messages[1].content
-        assert "BIRD medium semantic guard" in messages[1].content
+        assert "Structured-data medium semantic guard" in messages[1].content
         assert "Row grain" in messages[1].content
         assert "Formula/unit" in messages[1].content
         assert "Value/date scope" in messages[1].content
@@ -1432,6 +1520,15 @@ def test_context_manifest_links_quoted_values_to_columns() -> None:
         assert "quoted value matches" in manifest
         assert '"Yearly Kickoff" -> csv/meetings.csv:event_name' in manifest
         assert "csv/meetings.csv:amount" in manifest
+
+
+def test_manifest_linking_uses_generic_plural_normalization_not_domain_aliases() -> None:
+    assert "hero" in _tokenize_for_linking("heroes")
+    assert "comic" in _tokenize_for_linking("comics")
+    assert "superhero" in _tokenize_for_linking("superheroes")
+    assert "ratio" in _tokenize_for_linking("percentages")
+    assert "superhero" not in _tokenize_for_linking("heroes")
+    assert "hero" not in _tokenize_for_linking("superhero")
 
 
 def test_retrieve_knowledge_uses_full_document_and_schema_terms() -> None:

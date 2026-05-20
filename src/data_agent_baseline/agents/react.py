@@ -38,6 +38,16 @@ class CandidateAnswerDecision:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class FinalAnswerProjection:
+    answer: AnswerTable
+    changed: bool
+    confidence: str
+    kept_columns: tuple[str, ...]
+    dropped_columns: tuple[str, ...]
+    reasons: tuple[str, ...]
+
+
 FINAL_RESULT_MARKERS = (
     "FINAL_TABLE_JSON:",
     "FINAL_RESULT:",
@@ -138,7 +148,7 @@ MEDIUM_PLANNING_NODES = (
 )
 
 MEDIUM_SEMANTIC_GUARD_LINES = (
-    "BIRD medium semantic guard:",
+    "Structured-data medium semantic guard:",
     "- Final columns: infer the requested output columns from the question; remove helper IDs, dates, join keys, and filter columns unless explicitly requested.",
     "- Row grain: decide what one final row represents before filtering or grouping, using the task wording and observed table values.",
     "- Formula/unit: for average monthly/yearly, ratio, percentage, proportion, per unit, or total wording, verify the denominator and unit from schema, samples, or knowledge before finalizing.",
@@ -146,8 +156,8 @@ MEDIUM_SEMANTIC_GUARD_LINES = (
     "- Ambiguous columns: when words like type/category/status/date/id can map to multiple columns, inspect actual values and choose the column whose values answer the question.",
 )
 
-BIRD_SEMANTIC_CONTRACT_LINES = (
-    "BIRD semantic contract:",
+STRUCTURED_SEMANTIC_CONTRACT_LINES = (
+    "Structured-data semantic contract:",
     "- Before finalizing a calculation, write down the row grain, filters, formula, denominator/unit, and final output shape in the Thought or compact Python prints.",
     "- Date/month/year mentions must be matched to observed encoded values in the data, such as YYYYMM, YYYY-MM-DD, or separate year/month columns.",
     "- Percentage, ratio, increase/decrease rate, and how-many-times questions require an explicit numerator and denominator before submission.",
@@ -578,6 +588,175 @@ def _sanitize_answer_table(task: PublicTask, answer: AnswerTable) -> AnswerTable
     normalized = _normalize_answer_table(answer)
     complete_rows = _drop_incomplete_answer_rows(task, normalized)
     return _deduplicate_answer_rows(complete_rows)
+
+
+def _question_mentions_identifier(question_tokens: set[str]) -> bool:
+    return bool(question_tokens & {"id", "ids", "identifier", "identifiers", "code", "key", "keys"})
+
+
+def _question_mentions_column_family(question_tokens: set[str], column_tokens: set[str]) -> bool:
+    return bool(question_tokens & column_tokens)
+
+
+def _find_final_metric_columns(task: PublicTask, answer: AnswerTable) -> set[int]:
+    question = task.question.casefold()
+    question_tokens = _split_identifier_tokens(task.question)
+    final_metric_indices: set[int] = set()
+
+    percentage_question = (
+        bool(question_tokens & {"percentage", "percent", "proportion"})
+        or "what percentage" in question
+        or "calculate the percentage" in question
+    )
+    ratio_question = (
+        bool(question_tokens & {"ratio", "rate"})
+        or "how many times" in question
+    )
+    aggregate_question = bool(
+        question_tokens
+        & {"average", "avg", "mean", "amount", "cost", "price", "value", "total", "sum", "count"}
+    )
+
+    for index, column in enumerate(answer.columns):
+        tokens = _split_identifier_tokens(column)
+        if percentage_question and tokens & {"percentage", "percent", "proportion"}:
+            final_metric_indices.add(index)
+        elif ratio_question and tokens & {"ratio", "rate"}:
+            final_metric_indices.add(index)
+        elif aggregate_question and tokens & question_tokens & {
+            "average",
+            "avg",
+            "mean",
+            "amount",
+            "cost",
+            "price",
+            "value",
+            "total",
+            "sum",
+            "count",
+        }:
+            final_metric_indices.add(index)
+    return final_metric_indices
+
+
+def _definite_helper_column_reason(
+    task: PublicTask,
+    answer: AnswerTable,
+    column_index: int,
+    final_metric_indices: set[int],
+) -> str | None:
+    column = answer.columns[column_index]
+    column_text = column.strip().casefold()
+    column_tokens = _split_identifier_tokens(column)
+    question_tokens = _split_identifier_tokens(task.question)
+
+    if not column_tokens and not column_text:
+        return "blank column name"
+
+    if column_text.startswith("unnamed:"):
+        return "unnamed dataframe index column"
+
+    if column_tokens & {"debug", "helper", "tmp", "temp", "intermediate"}:
+        return "debug/helper/intermediate column"
+
+    if column_tokens & {"source", "path", "filepath", "filename"} and not _question_mentions_column_family(
+        question_tokens,
+        column_tokens,
+    ):
+        return "source/path bookkeeping column"
+
+    if column_tokens & {"index", "rowindex"} and not question_tokens & {"index", "rank", "position"}:
+        return "row index column"
+
+    if "row_number" in column_text or "rownum" in column_text:
+        if not question_tokens & {"row", "number", "rank", "position"}:
+            return "row-number helper column"
+
+    if column_tokens & {"join", "key"} and not _question_mentions_identifier(question_tokens):
+        return "join-key helper column"
+
+    if column_tokens & {"numerator", "denominator"}:
+        if final_metric_indices and not question_tokens & {"numerator", "denominator"}:
+            return "numerator/denominator helper for final metric"
+
+    if final_metric_indices and column_index not in final_metric_indices:
+        if column_tokens & {"count", "counts", "total", "totals", "number", "num", "n"}:
+            if not question_tokens & {"count", "total", "number", "num", "n"}:
+                return "count/total helper for final metric"
+
+    return None
+
+
+def _project_final_answer(task: PublicTask, answer: AnswerTable) -> FinalAnswerProjection:
+    sanitized = _sanitize_answer_table(task, answer)
+    if len(sanitized.columns) <= 1:
+        return FinalAnswerProjection(
+            answer=sanitized,
+            changed=False,
+            confidence="none",
+            kept_columns=tuple(sanitized.columns),
+            dropped_columns=(),
+            reasons=(),
+        )
+
+    final_metric_indices = _find_final_metric_columns(task, sanitized)
+    drop_reasons: dict[int, str] = {}
+    for index, _ in enumerate(sanitized.columns):
+        reason = _definite_helper_column_reason(task, sanitized, index, final_metric_indices)
+        if reason is not None:
+            drop_reasons[index] = reason
+
+    if not drop_reasons:
+        return FinalAnswerProjection(
+            answer=sanitized,
+            changed=False,
+            confidence="none",
+            kept_columns=tuple(sanitized.columns),
+            dropped_columns=(),
+            reasons=(),
+        )
+
+    kept_indices = [index for index in range(len(sanitized.columns)) if index not in drop_reasons]
+    if not kept_indices:
+        return FinalAnswerProjection(
+            answer=sanitized,
+            changed=False,
+            confidence="low",
+            kept_columns=tuple(sanitized.columns),
+            dropped_columns=(),
+            reasons=("projection would remove every column",),
+        )
+
+    projected = AnswerTable(
+        columns=[sanitized.columns[index] for index in kept_indices],
+        rows=[
+            [row[index] for index in kept_indices]
+            for row in sanitized.rows
+            if len(row) == len(sanitized.columns)
+        ],
+    )
+    projected = _deduplicate_answer_rows(projected)
+    return FinalAnswerProjection(
+        answer=projected,
+        changed=True,
+        confidence="high",
+        kept_columns=tuple(projected.columns),
+        dropped_columns=tuple(sanitized.columns[index] for index in sorted(drop_reasons)),
+        reasons=tuple(
+            f"{sanitized.columns[index]}: {drop_reasons[index]}"
+            for index in sorted(drop_reasons)
+        ),
+    )
+
+
+def _projection_report(projection: FinalAnswerProjection) -> dict[str, object]:
+    return {
+        "changed": projection.changed,
+        "confidence": projection.confidence,
+        "kept_columns": list(projection.kept_columns),
+        "dropped_columns": list(projection.dropped_columns),
+        "reasons": list(projection.reasons),
+    }
 
 
 def _answer_table_from_payload(payload: dict[str, object]) -> AnswerTable | None:
@@ -1722,7 +1901,7 @@ def _candidate_answer_from_step(task: PublicTask, step: StepRecord) -> AnswerTab
     answer = _answer_table_from_payload(payload)
     if answer is None:
         return None
-    return _sanitize_answer_table(task, answer)
+    return _project_final_answer(task, answer).answer
 
 
 def _latest_submission_ready_candidate(
@@ -1988,7 +2167,7 @@ def _build_planning_context(
                 f"{node['instruction']}"
             )
         lines.extend(MEDIUM_SEMANTIC_GUARD_LINES)
-        lines.extend(BIRD_SEMANTIC_CONTRACT_LINES)
+        lines.extend(STRUCTURED_SEMANTIC_CONTRACT_LINES)
         lines.append(
             "Priority: verify real tables/columns for requested concepts, decide the exact final "
             "answer columns, then compute and submit with no helper columns. Do not follow the "
@@ -2020,7 +2199,7 @@ def _build_planning_context(
             "observed_nodes": observed_nodes,
             "nodes": node_records,
             "semantic_guard": list(MEDIUM_SEMANTIC_GUARD_LINES),
-            "bird_semantic_contract": list(BIRD_SEMANTIC_CONTRACT_LINES),
+            "structured_semantic_contract": list(STRUCTURED_SEMANTIC_CONTRACT_LINES),
             "prompt_prefix": prompt_prefix,
         }
         return prompt_prefix, snapshot
@@ -2070,7 +2249,7 @@ def _build_planning_context(
         "Do this before printing `FINAL_TABLE_JSON:` on hard/extreme tasks with ambiguous values, formulas, "
         "thresholds, or markdown context."
     )
-    lines.extend(BIRD_SEMANTIC_CONTRACT_LINES)
+    lines.extend(STRUCTURED_SEMANTIC_CONTRACT_LINES)
     if loop_guard.get("triggered"):
         lines.append(
             "LOOP GUARD: the recent execution pattern repeated code, repeated output, "
@@ -2117,7 +2296,7 @@ def _build_planning_context(
         "observed_nodes": observed_nodes,
         "evidence_ledger": evidence_ledger,
         "loop_guard": loop_guard,
-        "bird_semantic_contract": list(BIRD_SEMANTIC_CONTRACT_LINES),
+        "structured_semantic_contract": list(STRUCTURED_SEMANTIC_CONTRACT_LINES),
         "nodes": node_records,
         "prompt_prefix": prompt_prefix,
     }
@@ -2350,7 +2529,10 @@ class ReActAgent:
         answer = _answer_table_from_payload(payload)
         if answer is None:
             return None
-        return _sanitize_answer_table(task, answer)
+        projection = _project_final_answer(task, answer)
+        if projection.changed:
+            content["final_answer_projection"] = _projection_report(projection)
+        return projection.answer
 
     def _sanitize_model_step(self, task: PublicTask, model_step: ModelStep) -> ModelStep:
         if model_step.action != "answer":
@@ -2358,7 +2540,7 @@ class ReActAgent:
         answer = _answer_table_from_payload(model_step.action_input)
         if answer is None:
             return model_step
-        sanitized = _sanitize_answer_table(task, answer)
+        sanitized = _project_final_answer(task, answer).answer
         return ModelStep(
             thought=model_step.thought,
             action=model_step.action,
@@ -2605,7 +2787,7 @@ class ReActAgent:
                         break
                 if tool_result.is_terminal:
                     state.answer = (
-                        _sanitize_answer_table(task, tool_result.answer)
+                        _project_final_answer(task, tool_result.answer).answer
                         if tool_result.answer is not None
                         else None
                     )
