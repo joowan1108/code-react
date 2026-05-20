@@ -38,8 +38,6 @@ class AgentConfig:
     observation_tail_chars: int = 1800
     stderr_tail_chars: int = 4000
     final_marker_chars: int = 4000
-    verifier_enabled: bool = True
-    verifier_stdout_chars: int = 2500
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,19 +62,6 @@ def _path_value(raw_value: str | None, default_value: Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return (PROJECT_ROOT / candidate).resolve()
-
-
-def _bool_value(raw_value: object, default_value: bool) -> bool:
-    if raw_value is None:
-        return default_value
-    if isinstance(raw_value, bool):
-        return raw_value
-    normalized = str(raw_value).strip().casefold()
-    if normalized in {"1", "true", "yes", "y", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "n", "off"}:
-        return False
-    return default_value
 
 
 def load_app_config(config_path: Path) -> AppConfig:
@@ -122,12 +107,6 @@ def load_app_config(config_path: Path) -> AppConfig:
         ),
         stderr_tail_chars=int(agent_payload.get("stderr_tail_chars", agent_defaults.stderr_tail_chars)),
         final_marker_chars=int(agent_payload.get("final_marker_chars", agent_defaults.final_marker_chars)),
-        verifier_enabled=_bool_value(
-            agent_payload.get("verifier_enabled"), agent_defaults.verifier_enabled
-        ),
-        verifier_stdout_chars=int(
-            agent_payload.get("verifier_stdout_chars", agent_defaults.verifier_stdout_chars)
-        ),
     )
     raw_run_id = run_payload.get("run_id")
     run_id = run_defaults.run_id

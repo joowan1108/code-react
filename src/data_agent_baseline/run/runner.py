@@ -216,8 +216,6 @@ def _run_single_task_core(
             observation_tail_chars=config.agent.observation_tail_chars,
             stderr_tail_chars=config.agent.stderr_tail_chars,
             final_marker_chars=config.agent.final_marker_chars,
-            verifier_enabled=config.agent.verifier_enabled,
-            verifier_stdout_chars=config.agent.verifier_stdout_chars,
         ),
         system_prompt=system_prompt,
         prompt_tool_names=prompt_tool_names,

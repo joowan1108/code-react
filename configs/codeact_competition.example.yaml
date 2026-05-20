@@ -17,8 +17,6 @@ agent:
   observation_tail_chars: 1800
   stderr_tail_chars: 4000
   final_marker_chars: 4000
-  verifier_enabled: true
-  verifier_stdout_chars: 2500
 
 run:
   output_dir: artifacts/runs

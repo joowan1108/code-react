@@ -16,7 +16,6 @@ from data_agent_baseline.agents.react import (
     _candidate_decision_from_observation,
     _evidence_consistency_warnings,
     _final_answer_check,
-    _parse_verifier_decision,
     _python_repair_hints,
     _render_observation_for_prompt,
     _sanitize_answer_table,
@@ -971,7 +970,7 @@ def test_evidence_consistency_requires_final_computation_link() -> None:
         assert resolved_warnings == []
 
 
-def test_evidence_consistency_warning_is_trace_only_without_verifier_rejection() -> None:
+def test_evidence_consistency_warning_is_trace_only() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         task = PublicTask(
@@ -1001,126 +1000,6 @@ def test_evidence_consistency_warning_is_trace_only_without_verifier_rejection()
         assert decision.auto_submit is True
         assert decision.store_as_fallback is True
         assert "evidence_consistency_warnings_present" not in decision.reasons
-
-
-def test_independent_verifier_rejection_blocks_candidate() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        context_path = Path(temp_dir)
-        task = PublicTask(
-            record=TaskRecord(
-                task_id="task_verifier_candidate",
-                difficulty="hard",
-                question="List the ID of patients with abnormal PT values.",
-            ),
-            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
-        )
-        answer = AnswerTable(columns=["ID"], rows=[[1], [2]])
-        decision = _candidate_decision_from_observation(
-            task,
-            {
-                "ok": True,
-                "tool": "execute_python",
-                "content": {
-                    "output": "",
-                    "independent_verifier": {
-                        "verdict": "reject",
-                        "reasons": ["threshold was not applied"],
-                    },
-                    "verifier_rejected": True,
-                },
-            },
-            answer,
-        )
-
-        assert decision.auto_submit is False
-        assert decision.store_as_fallback is False
-        assert "independent_verifier_rejected" in decision.reasons
-
-
-def test_independent_verifier_accepts_small_candidate_without_extra_review() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        context_path = Path(temp_dir)
-        task = PublicTask(
-            record=TaskRecord(
-                task_id="task_verifier_accept",
-                difficulty="hard",
-                question="List the ID of patients with abnormal PT values.",
-            ),
-            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
-        )
-        answer = AnswerTable(columns=["ID"], rows=[[1], [2]])
-        decision = _candidate_decision_from_observation(
-            task,
-            {
-                "ok": True,
-                "tool": "execute_python",
-                "content": {
-                    "output": "",
-                    "independent_verifier": {
-                        "verdict": "accept",
-                        "reasons": ["code output matches candidate"],
-                    },
-                },
-            },
-            answer,
-        )
-
-        assert decision.auto_submit is True
-        assert decision.store_as_fallback is True
-        assert "small_candidate_requires_model_review" not in decision.reasons
-
-
-def test_independent_verifier_accept_can_override_final_warning() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        context_path = Path(temp_dir)
-        task = PublicTask(
-            record=TaskRecord(
-                task_id="task_verifier_warning_accept",
-                difficulty="hard",
-                question="List the school names.",
-            ),
-            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
-        )
-        answer = AnswerTable(columns=["School Name", "debug_score"], rows=[["A", 0.9]])
-        decision = _candidate_decision_from_observation(
-            task,
-            {
-                "ok": True,
-                "tool": "execute_python",
-                "content": {
-                    "output": "",
-                    "independent_verifier": {
-                        "verdict": "accept",
-                        "reasons": ["debug_score is explicitly requested by this task context"],
-                    },
-                },
-            },
-            answer,
-        )
-
-        assert decision.auto_submit is True
-        assert "final_answer_check_warnings_present" not in decision.reasons
-
-
-def test_parse_independent_verifier_decision() -> None:
-    decision = _parse_verifier_decision(
-        "```json\n"
-        '{"verdict":"reject","reasons":["wrong denominator"],"repair_instruction":"recompute ratio"}'
-        "\n```"
-    )
-
-    assert decision.verdict == "reject"
-    assert decision.reasons == ("wrong denominator",)
-    assert decision.repair_instruction == "recompute ratio"
-
-
-def test_parse_independent_verifier_non_json_fallback() -> None:
-    decision = _parse_verifier_decision(
-        "I would reject this candidate because the denominator does not match the question."
-    )
-
-    assert decision.verdict == "reject"
-    assert "fallback heuristic" in decision.reasons[0]
 
 
 def test_loop_guard_warns_after_repeated_python_execution() -> None:

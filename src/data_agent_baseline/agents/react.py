@@ -28,8 +28,6 @@ class ReActAgentConfig:
     observation_tail_chars: int = 1800
     stderr_tail_chars: int = 4000
     final_marker_chars: int = 4000
-    verifier_enabled: bool = True
-    verifier_stdout_chars: int = 2500
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,14 +36,6 @@ class CandidateAnswerDecision:
     auto_submit: bool
     store_as_fallback: bool
     reasons: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateVerificationDecision:
-    verdict: str
-    reasons: tuple[str, ...]
-    repair_instruction: str | None = None
-    raw_response: str = ""
 
 
 FINAL_RESULT_MARKERS = (
@@ -615,169 +605,6 @@ def _answer_preview(answer: AnswerTable, *, max_rows: int = 3) -> dict[str, obje
     }
 
 
-def _truncate_middle(text: str, max_chars: int) -> str:
-    if max_chars <= 0 or len(text) <= max_chars:
-        return text
-    head_chars = max_chars // 2
-    tail_chars = max_chars - head_chars
-    omitted = len(text) - head_chars - tail_chars
-    return f"{text[:head_chars]}\n...[omitted {omitted} chars]...\n{text[-tail_chars:]}"
-
-
-def _normalize_verifier_verdict(value: object) -> str:
-    verdict = str(value or "uncertain").strip().casefold()
-    if verdict in {"accept", "accepted", "pass", "passed", "ok", "correct", "yes"}:
-        return "accept"
-    if verdict in {"reject", "rejected", "fail", "failed", "incorrect", "wrong", "no"}:
-        return "reject"
-    return "uncertain"
-
-
-def _parse_verifier_decision(raw_response: str) -> CandidateVerificationDecision:
-    try:
-        payload = _load_first_json_object(raw_response)
-    except ValueError:
-        lowered = raw_response.casefold()
-        reject_patterns = (
-            r"\bverdict\s*[:=]\s*reject\b",
-            r"\bdecision\s*[:=]\s*reject\b",
-            r"\breject(?:ed)?\b",
-            r"\bincorrect\b",
-            r"\bwrong\b",
-            r"\bmismatch\b",
-            r"\bnot supported\b",
-            r"\bdoes not match\b",
-            r"\bextra/missing\b",
-        )
-        accept_patterns = (
-            r"\bverdict\s*[:=]\s*accept\b",
-            r"\bdecision\s*[:=]\s*accept\b",
-            r"\baccept(?:ed)?\b",
-            r"\bsupported by\b",
-            r"\bmatches the candidate\b",
-            r"\bcandidate (?:answer )?is correct\b",
-        )
-        verdict = "uncertain"
-        if any(re.search(pattern, lowered) for pattern in reject_patterns):
-            verdict = "reject"
-        elif any(re.search(pattern, lowered) for pattern in accept_patterns):
-            verdict = "accept"
-        return CandidateVerificationDecision(
-            verdict=verdict,
-            reasons=(
-                "verifier returned non-JSON text; parsed by fallback heuristic"
-                if verdict != "uncertain"
-                else "verifier returned no parseable JSON verdict"
-            ,),
-            raw_response=raw_response,
-        )
-
-    verdict = _normalize_verifier_verdict(
-        payload.get("verdict", payload.get("decision", payload.get("status")))
-    )
-    raw_reasons = payload.get("reasons", payload.get("reason", []))
-    if isinstance(raw_reasons, list):
-        reasons = tuple(str(reason) for reason in raw_reasons if str(reason).strip())
-    elif raw_reasons:
-        reasons = (str(raw_reasons),)
-    else:
-        reasons = ()
-    repair_instruction = payload.get("repair_instruction", payload.get("next_step"))
-    if repair_instruction is not None:
-        repair_instruction = str(repair_instruction).strip() or None
-    return CandidateVerificationDecision(
-        verdict=verdict,
-        reasons=reasons,
-        repair_instruction=repair_instruction,
-        raw_response=raw_response,
-    )
-
-
-def _verifier_decision_to_dict(decision: CandidateVerificationDecision) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "verdict": decision.verdict,
-        "reasons": list(decision.reasons),
-    }
-    if decision.repair_instruction:
-        payload["repair_instruction"] = decision.repair_instruction
-    if decision.raw_response:
-        payload["raw_response"] = _truncate_middle(decision.raw_response, 2000)
-    return payload
-
-
-def _content_verifier_verdict(content: dict[str, object]) -> str | None:
-    verifier = content.get("independent_verifier")
-    if not isinstance(verifier, dict):
-        return None
-    return _normalize_verifier_verdict(verifier.get("verdict"))
-
-
-def _task_uses_independent_verifier(task: PublicTask, config: ReActAgentConfig) -> bool:
-    return config.verifier_enabled and task.difficulty.casefold() in {"hard", "extreme"}
-
-
-def _build_candidate_verifier_messages(
-    task: PublicTask,
-    model_step: ModelStep,
-    observation: dict[str, object],
-    answer: AnswerTable,
-    *,
-    stdout_chars: int,
-) -> list[ModelMessage]:
-    content = observation.get("content")
-    content_dict = content if isinstance(content, dict) else {}
-    stdout = str(content_dict.get("output") or content_dict.get("stdout") or "")
-    stderr = str(content_dict.get("stderr") or "")
-    traceback_text = str(content_dict.get("traceback") or "")
-    code = ""
-    if isinstance(model_step.action_input, dict):
-        code = str(model_step.action_input.get("code") or "")
-
-    if len(answer.rows) <= 20:
-        candidate_payload: object = answer.to_dict()
-    else:
-        candidate_payload = _answer_preview(answer, max_rows=8)
-
-    verifier_input = {
-        "task_id": task.task_id,
-        "difficulty": task.difficulty,
-        "question": task.question,
-        "candidate_answer": candidate_payload,
-        "final_answer_check": content_dict.get("final_answer_check"),
-        "evidence_ledger_report": content_dict.get("evidence_ledger_report"),
-        "execution": {
-            "ok": observation.get("ok"),
-            "stdout": _truncate_middle(stdout, stdout_chars),
-            "stderr": _truncate_middle(stderr, 1200),
-            "traceback": _truncate_middle(traceback_text, 1200),
-        },
-        "last_python_code": _truncate_middle(code, 3500),
-    }
-    system_message = (
-        "You are an independent verifier for a data-analysis answer candidate. "
-        "You do not solve from scratch. Check whether the candidate is directly supported "
-        "by the shown code, execution output, and evidence. Return ONLY one JSON object, "
-        "with no markdown fences and no prose outside JSON."
-    )
-    user_message = (
-        "Verify the candidate answer below.\n"
-        "Accept only when the executed code/output clearly supports the exact requested rows, "
-        "columns, filters, formula, denominator/unit, and semantic mappings. "
-        "Reject when there is a concrete mismatch, traceback, unsupported assumption, extra/missing "
-        "final column, wrong formula, or ignored verified evidence. Use uncertain if there is not enough "
-        "information to decide.\n\n"
-        "Return ONLY JSON with this schema:\n"
-        '{"verdict":"accept|reject|uncertain","reasons":["..."],"repair_instruction":"optional next action"}'
-        "\nIf uncertain, still return JSON. Do not write an explanation outside JSON."
-        "\n\nVerifier input:\n"
-        + _safe_json_dumps(verifier_input)
-    )
-    return [
-        ModelMessage(role="system", content=system_message),
-        ModelMessage(role="user", content=user_message),
-    ]
-
-
 def _python_repair_hints(content: dict[str, object], code: str) -> list[str]:
     text = "\n".join(
         str(content.get(key) or "")
@@ -994,25 +821,20 @@ def _candidate_decision_from_observation(
         reasons.append("single_value_question_requires_one_cell_answer")
         hard_reasons.append("single_value_question_requires_one_cell_answer")
 
-    verifier_verdict = _content_verifier_verdict(content_dict)
     answer_warnings = _final_answer_check_warnings(task, answer)
-    if answer_warnings and verifier_verdict != "accept":
+    if answer_warnings:
         reasons.append("final_answer_check_warnings_present")
         hard_reasons.append("final_answer_check_warnings_present")
-    if content_dict.get("verifier_rejected") or verifier_verdict == "reject":
-        reasons.append("independent_verifier_rejected")
-        hard_reasons.append("independent_verifier_rejected")
     if content_dict.get("candidate_review_instruction"):
         reasons.append("candidate_review_required")
         hard_reasons.append("candidate_review_required")
-    if len(answer.rows) <= 20 and verifier_verdict != "accept":
+    if len(answer.rows) <= 20:
         reasons.append("small_candidate_requires_model_review")
         hard_reasons.append("small_candidate_requires_model_review")
 
     store_as_fallback = (
         bool(answer.rows)
         and "python_traceback_present" not in reasons
-        and "independent_verifier_rejected" not in reasons
     )
     return CandidateAnswerDecision(
         answer=answer,
@@ -1864,42 +1686,6 @@ def _latest_candidate_review_instruction(state: AgentRuntimeState) -> str | None
     return None
 
 
-def _latest_verifier_rejection_instruction(state: AgentRuntimeState) -> str | None:
-    for step in reversed(state.steps[-4:]):
-        observation = step.observation
-        if not isinstance(observation, dict):
-            continue
-        content = observation.get("content")
-        if not isinstance(content, dict):
-            continue
-        verdict = _content_verifier_verdict(content)
-        if verdict == "accept":
-            return None
-        if not content.get("verifier_rejected") and verdict != "reject":
-            continue
-        verifier = content.get("independent_verifier")
-        repair_instruction = None
-        reasons: list[str] = []
-        if isinstance(verifier, dict):
-            raw_repair = verifier.get("repair_instruction")
-            if isinstance(raw_repair, str) and raw_repair.strip():
-                repair_instruction = raw_repair.strip()
-            raw_reasons = verifier.get("reasons")
-            if isinstance(raw_reasons, list):
-                reasons = [str(reason) for reason in raw_reasons if str(reason).strip()]
-        message = (
-            "Independent verifier rejected the previous Python final-table candidate. "
-            "Do not submit that same table directly. Run a compact Python repair/check, "
-            "fix the concrete mismatch, and print a new `FINAL_TABLE_JSON:` only if it is supported."
-        )
-        if reasons:
-            message += " Verifier reasons: " + "; ".join(reasons[:3]) + "."
-        if repair_instruction:
-            message += " Suggested repair: " + repair_instruction
-        return message
-    return None
-
-
 def _medium_empty_answer_recheck_seen(state: AgentRuntimeState) -> bool:
     return any(
         isinstance(step.observation, dict)
@@ -2282,8 +2068,7 @@ def _build_planning_context(
         "`EVIDENCE_LEDGER_JSON:` followed by a compact JSON list. Each item should include "
         "`id`, `status` (`verified` or `unresolved`), `source`, and the concrete columns/values/rules used. "
         "Do this before printing `FINAL_TABLE_JSON:` on hard/extreme tasks with ambiguous values, formulas, "
-        "thresholds, or markdown context. You may also print `EVIDENCE_CONSISTENCY_JSON:` to explain where "
-        "verified evidence was used, but final acceptance is checked by a separate runtime verifier when enabled."
+        "thresholds, or markdown context."
     )
     lines.extend(BIRD_SEMANTIC_CONTRACT_LINES)
     if loop_guard.get("triggered"):
@@ -2512,11 +2297,8 @@ class ReActAgent:
                 f"{missing_special_evidence[:4]}. Keep it compact; each item needs id, status, source, "
                 "and concrete columns/values/rules."
             )
-        verifier_rejection_instruction = _latest_verifier_rejection_instruction(state)
         candidate_review_instruction = _latest_candidate_review_instruction(state)
-        if verifier_rejection_instruction:
-            instructions.append(verifier_rejection_instruction)
-        elif candidate_review_instruction:
+        if candidate_review_instruction:
             instructions.append(candidate_review_instruction)
         elif _should_prioritize_answer_submission(
             task,
@@ -2583,37 +2365,6 @@ class ReActAgent:
             action_input=sanitized.to_dict(),
             raw_response=model_step.raw_response,
         )
-
-    def _verify_candidate_answer(
-        self,
-        task: PublicTask,
-        model_step: ModelStep,
-        observation: dict[str, object],
-        answer: AnswerTable,
-    ) -> CandidateVerificationDecision | None:
-        if not _task_uses_independent_verifier(task, self.config):
-            return None
-        if self.system_prompt != CODEACT_REACT_SYSTEM_PROMPT:
-            return None
-        if model_step.action != "execute_python":
-            return None
-
-        try:
-            raw_response = self.model.complete(
-                _build_candidate_verifier_messages(
-                    task,
-                    model_step,
-                    observation,
-                    answer,
-                    stdout_chars=self.config.verifier_stdout_chars,
-                )
-            )
-            return _parse_verifier_decision(raw_response)
-        except Exception as exc:  # noqa: BLE001
-            return CandidateVerificationDecision(
-                verdict="uncertain",
-                reasons=(f"verifier request failed: {exc}",),
-            )
 
     def run(self, task: PublicTask) -> AgentRunResult:
         state = AgentRuntimeState()
@@ -2756,32 +2507,6 @@ class ReActAgent:
                     )
                     continue
 
-                verifier_rejection_instruction = (
-                    _latest_verifier_rejection_instruction(state)
-                    if model_step.action == "answer"
-                    else None
-                )
-                if verifier_rejection_instruction:
-                    observation = {
-                        "ok": False,
-                        "independent_verifier_recheck": True,
-                        "error": verifier_rejection_instruction,
-                    }
-                    self._append_step(
-                        task,
-                        state,
-                        StepRecord(
-                            step_index=step_index,
-                            thought=model_step.thought,
-                            action=model_step.action,
-                            action_input=model_step.action_input,
-                            raw_response=raw_response,
-                            observation=observation,
-                            ok=False,
-                        )
-                    )
-                    continue
-
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 content = dict(tool_result.content)
                 if model_step.action == "execute_python":
@@ -2818,10 +2543,9 @@ class ReActAgent:
                     final_answer_check = _final_answer_check(task, candidate_answer)
                     content["final_answer_check"] = final_answer_check
                     warnings = final_answer_check.get("warnings", [])
-                    warning_reasons: list[str] = []
-                    if isinstance(warnings, list) and warnings:
-                        warning_reasons.extend(str(warning) for warning in warnings[:3])
                     review_reasons: list[str] = []
+                    if isinstance(warnings, list) and warnings:
+                        review_reasons.extend(str(warning) for warning in warnings[:3])
                     missing_evidence = _missing_special_evidence_ids(
                         task,
                         state,
@@ -2832,75 +2556,20 @@ class ReActAgent:
                             "semantic evidence still needs explicit grounding: "
                             + ", ".join(missing_evidence[:4])
                         )
-                    required_consistency_ids, consistency_warnings = _evidence_consistency_warnings(
-                        task,
-                        state,
-                        current_content=content,
-                    )
-                    if consistency_warnings:
-                        content["evidence_consistency_warnings"] = consistency_warnings
-                    elif required_consistency_ids:
-                        content["evidence_consistency_resolved"] = True
-
-                    verifier_decision = None
-                    if tool_result.ok:
-                        verifier_decision = self._verify_candidate_answer(
-                            task,
-                            model_step,
-                            observation,
-                            candidate_answer,
-                        )
-                    if verifier_decision is not None:
-                        content["independent_verifier"] = _verifier_decision_to_dict(verifier_decision)
-                        if verifier_decision.verdict == "reject":
-                            content["verifier_rejected"] = True
-                            review_reasons.append(
-                                "independent verifier rejected candidate: "
-                                + "; ".join(verifier_decision.reasons[:3])
-                            )
-                    verifier_verdict = (
-                        verifier_decision.verdict
-                        if verifier_decision is not None
-                        else _content_verifier_verdict(content)
-                    )
-                    if warning_reasons and verifier_verdict != "accept":
-                        review_reasons.extend(warning_reasons)
-                    if len(candidate_answer.rows) <= 20 and verifier_verdict != "accept":
+                    if len(candidate_answer.rows) <= 20:
                         review_reasons.append("candidate has <=20 rows, so the model should confirm final shape")
                     if review_reasons:
-                        if verifier_decision is not None and verifier_decision.verdict == "reject":
-                            content["candidate_review_instruction"] = (
-                                "Runtime independent-verifier review: a separate verifier rejected the "
-                                "previous final-table candidate. Do not submit the same table. Run a compact "
-                                "Python repair/check that addresses the verifier reasons, then print "
-                                "`FINAL_TABLE_JSON:` only if the corrected computation supports it. "
-                                f"Candidate preview: {_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
-                                "Review reasons: "
-                                + "; ".join(review_reasons)
-                            )
-                        elif consistency_warnings:
-                            content["candidate_review_instruction"] = (
-                                "Runtime evidence note: Python printed a plausible final table, but verified "
-                                "semantic evidence was not explicitly tied to the final computation. This is "
-                                "not a hard rejection by itself; submit if the code clearly used the rule/value/"
-                                "formula, otherwise run one compact verification and print a corrected "
-                                "`FINAL_TABLE_JSON:`. "
-                                f"Candidate preview: {_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
-                                "Review reasons: "
-                                + "; ".join(review_reasons)
-                            )
-                        else:
-                            content["candidate_review_instruction"] = (
-                                "Runtime final-answer review: Python printed a plausible final table, "
-                                "but the runtime is not auto-submitting it. Do not run more exploration just because of this. "
-                                "If the candidate columns and rows exactly answer the question, submit `Answer:` "
-                                "with that table now. If a warning identifies a real extra/missing column or wrong "
-                                "row shape, or missing semantic evidence identifies an unresolved mapping/rule, "
-                                "fix that evidence first and submit the corrected table. Candidate preview: "
-                                f"{_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
-                                "Review reasons: "
-                                + "; ".join(review_reasons)
-                            )
+                        content["candidate_review_instruction"] = (
+                            "Runtime final-answer review: Python printed a plausible final table, "
+                            "but the runtime is not auto-submitting it. Do not run more exploration just because of this. "
+                            "If the candidate columns and rows exactly answer the question, submit `Answer:` "
+                            "with that table now. If a warning identifies a real extra/missing column or wrong "
+                            "row shape, or missing semantic evidence identifies an unresolved mapping/rule, "
+                            "fix that evidence first and submit the corrected table. Candidate preview: "
+                            f"{_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
+                            "Review reasons: "
+                            + "; ".join(review_reasons)
+                        )
                 step_record = StepRecord(
                     step_index=step_index,
                     thought=model_step.thought,
