@@ -251,53 +251,6 @@ ROW_MATCH_GENERIC_TOKENS = {
     "type",
     "year",
 }
-MARKDOWN_ENTITY_TABLE_TRIGGER_TERMS = {
-    "age",
-    "alignment",
-    "alp",
-    "birth",
-    "birthday",
-    "bilirubin",
-    "born",
-    "cre",
-    "creatinine",
-    "gender",
-    "got",
-    "gpt",
-    "height",
-    "hero",
-    "heroes",
-    "ldh",
-    "patient",
-    "patients",
-    "publisher",
-    "sex",
-    "superhero",
-    "superheroes",
-    "t",
-    "tbill",
-    "urea",
-    "uric",
-    "weight",
-}
-MARKDOWN_ENTITY_TABLE_AVOID_TERMS = {
-    "advertisement",
-    "allocation",
-    "amount",
-    "budget",
-    "budgets",
-    "card",
-    "cards",
-    "commander",
-    "content",
-    "event",
-    "format",
-    "legal",
-    "legality",
-    "meeting",
-    "status",
-    "warning",
-}
 MARKDOWN_ENTITY_TABLE_FIELDS = {
     "alignment_id",
     "alp",
@@ -867,10 +820,10 @@ def build_markdown_entity_table(
     """Parse markdown prose into merged row-like records keyed by IDs.
 
     The helper is intentionally deterministic and conservative. It does not try
-    to answer the task. It extracts common record IDs, patient IDs, card IDs,
-    numeric measurements, dates, and coded affiliations from prose blocks, then
-    merges blocks that mention the same ID. This gives the model a dataframe-like
-    bridge when the true table is encoded in markdown paragraphs.
+    to answer the task. It extracts stable IDs, numeric measurements, dates,
+    and coded affiliations from prose blocks, then merges blocks that mention
+    the same ID. This gives the model a dataframe-like bridge when the true
+    table is encoded in markdown paragraphs.
     """
 
     root = Path(context_root).resolve()
@@ -971,7 +924,7 @@ def build_markdown_entity_table(
         "record_count": len(all_records),
         "source_paths": sorted(source_paths),
         "note": (
-            "Rows are parsed from markdown prose and merged by patient_id/id/cards_id/record_id. "
+            "Rows are parsed from markdown prose and merged by stable identifiers. "
             "Use as grounded extraction hints and verify edge cases before finalizing."
         ),
     }
@@ -1568,23 +1521,10 @@ def _join_candidates_from_id_sets(id_value_sets: dict[str, set[str]], *, max_can
     ]
 
 
-def _question_prefers_markdown_entity_table(question: str) -> bool:
-    tokens = _linking_tokens(question)
-    positive = bool(tokens & MARKDOWN_ENTITY_TABLE_TRIGGER_TERMS)
-    negative = bool(tokens & MARKDOWN_ENTITY_TABLE_AVOID_TERMS)
-    if not positive:
-        return False
-    if negative and not (tokens & {"height", "publisher", "creatinine", "birth", "birthday", "age"}):
-        return False
-    return True
-
-
 def _markdown_entity_table_is_relevant(
     question: str,
     parsed_table: dict[str, object],
 ) -> bool:
-    if not _question_prefers_markdown_entity_table(question):
-        return False
     field_coverage = parsed_table.get("field_coverage")
     if not isinstance(field_coverage, dict):
         return False
@@ -1592,7 +1532,7 @@ def _markdown_entity_table_is_relevant(
     if record_count < 1:
         return False
     fields = {str(field) for field, count in field_coverage.items() if int(count or 0) > 0}
-    if not fields & MARKDOWN_ENTITY_TABLE_FIELDS:
+    if not fields:
         return False
 
     question_tokens = _linking_tokens(question)
@@ -1603,9 +1543,12 @@ def _markdown_entity_table_is_relevant(
     }
     if question_tokens & field_tokens:
         return True
-    if question_tokens & {"hero", "heroes", "superhero", "superheroes"} and fields & {"id", "height_cm", "publisher_id"}:
+
+    identifier_fields = {"id", "patient_id", "cards_id", "record_ids"}
+    non_identifier_fields = fields - identifier_fields
+    if len(non_identifier_fields) >= 2 and fields & identifier_fields:
         return True
-    if question_tokens & {"patient", "patients"} and fields & {"patient_id", "birth_year", "creatinine"}:
+    if record_count >= 2 and non_identifier_fields:
         return True
     return False
 
@@ -1698,7 +1641,7 @@ def build_question_data_links(
             )
 
     markdown_entity_summary: dict[str, object] | None = None
-    if include_markdown and _question_prefers_markdown_entity_table(question):
+    if include_markdown:
         parsed_table = build_markdown_entity_table(
             root,
             question_terms or None,
@@ -1728,8 +1671,8 @@ def build_question_data_links(
                     for record in parsed_records[:max_candidates]
                 ],
                 "note": (
-                    "These are row-like records parsed from markdown and merged by id/patient_id/cards_id. "
-                    "Use only when field_coverage directly contains requested entity attributes."
+                    "These are row-like records parsed from markdown and merged by stable identifiers. "
+                    "Use only when field_coverage and sample_records directly support the question."
                 ),
             }
             parsed_field_names = sorted(

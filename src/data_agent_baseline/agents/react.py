@@ -47,6 +47,10 @@ EVIDENCE_LEDGER_MARKERS = (
     "EVIDENCE_LEDGER_JSON:",
     "EVIDENCE_LEDGER:",
 )
+EVIDENCE_CONSISTENCY_MARKERS = (
+    "EVIDENCE_CONSISTENCY_JSON:",
+    "CONSISTENCY_CHECK_JSON:",
+)
 
 PLANNING_DIFFICULTIES = {"medium", "hard", "extreme"}
 LINKING_REQUIREMENT_DIFFICULTIES = {"hard", "extreme"}
@@ -821,6 +825,9 @@ def _candidate_decision_from_observation(
     if answer_warnings:
         reasons.append("final_answer_check_warnings_present")
         hard_reasons.append("final_answer_check_warnings_present")
+    if content_dict.get("evidence_consistency_warnings"):
+        reasons.append("evidence_consistency_warnings_present")
+        hard_reasons.append("evidence_consistency_warnings_present")
     if content_dict.get("candidate_review_instruction"):
         reasons.append("candidate_review_required")
         hard_reasons.append("candidate_review_required")
@@ -828,7 +835,11 @@ def _candidate_decision_from_observation(
         reasons.append("small_candidate_requires_model_review")
         hard_reasons.append("small_candidate_requires_model_review")
 
-    store_as_fallback = bool(answer.rows) and "python_traceback_present" not in reasons
+    store_as_fallback = (
+        bool(answer.rows)
+        and "python_traceback_present" not in reasons
+        and "evidence_consistency_warnings_present" not in reasons
+    )
     return CandidateAnswerDecision(
         answer=answer,
         auto_submit=not hard_reasons,
@@ -1317,6 +1328,7 @@ def _evidence_entry_is_verified(entry: dict[str, object]) -> bool:
 def _evidence_entry_matches(entry: dict[str, object], requirement_id: str) -> bool:
     labels = [
         entry.get("id"),
+        entry.get("evidence_id"),
         entry.get("requirement_id"),
         entry.get("requirement"),
         entry.get("type"),
@@ -1325,6 +1337,123 @@ def _evidence_entry_matches(entry: dict[str, object], requirement_id: str) -> bo
     ]
     normalized = {str(label).casefold() for label in labels if label}
     return requirement_id.casefold() in normalized
+
+
+def _evidence_entry_requirement_id(entry: dict[str, object]) -> str | None:
+    for key in (
+        "id",
+        "evidence_id",
+        "requirement_id",
+        "requirement",
+        "type",
+        "kind",
+        "evidence_type",
+    ):
+        value = entry.get(key)
+        if not value:
+            continue
+        normalized = str(value).casefold()
+        if normalized in SPECIAL_EVIDENCE_IDS:
+            return normalized
+    return None
+
+
+def _consistency_entry_is_satisfied(entry: dict[str, object]) -> bool:
+    for key in (
+        "used_in_final_computation",
+        "consistent",
+        "verified",
+        "ok",
+        "satisfied",
+    ):
+        value = entry.get(key)
+        if value is True:
+            return True
+        if isinstance(value, str) and value.casefold() in {"true", "yes", "used", "verified", "consistent"}:
+            return True
+    status = str(entry.get("status") or "").casefold()
+    return status in {
+        "used",
+        "verified",
+        "grounded",
+        "consistent",
+        "satisfied",
+        "done",
+        "ok",
+        "true",
+    }
+
+
+def _verified_special_evidence_ids(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    *,
+    current_content: dict[str, object] | None = None,
+) -> list[str]:
+    if not _task_uses_advanced_planning(task):
+        return []
+    entries = _evidence_entries_from_state(state)
+    if current_content is not None:
+        entries.extend(_evidence_entries_from_value(current_content.get("evidence_ledger_report")))
+
+    ids: list[str] = []
+    for entry in entries:
+        requirement_id = _evidence_entry_requirement_id(entry)
+        if requirement_id is None or not _evidence_entry_is_verified(entry):
+            continue
+        if requirement_id not in ids:
+            ids.append(requirement_id)
+    return ids
+
+
+def _evidence_consistency_warnings(
+    task: PublicTask,
+    state: AgentRuntimeState,
+    *,
+    current_content: dict[str, object],
+) -> tuple[list[str], list[str]]:
+    required_ids = _verified_special_evidence_ids(
+        task,
+        state,
+        current_content=current_content,
+    )
+    if not required_ids:
+        return [], []
+
+    consistency_entries = _evidence_entries_from_value(
+        current_content.get("evidence_consistency_report")
+    )
+    if not consistency_entries:
+        return required_ids, [
+            "missing EVIDENCE_CONSISTENCY_JSON showing how verified evidence was used in the final computation"
+        ]
+
+    warnings: list[str] = []
+    for requirement_id in required_ids:
+        matches = [
+            entry
+            for entry in consistency_entries
+            if _evidence_entry_matches(entry, requirement_id)
+        ]
+        if not matches:
+            warnings.append(f"{requirement_id} is not covered by EVIDENCE_CONSISTENCY_JSON")
+            continue
+        if not any(_consistency_entry_is_satisfied(entry) for entry in matches):
+            warnings.append(f"{requirement_id} is reported but not marked used/consistent")
+    return required_ids, warnings
+
+
+def _latest_evidence_consistency_warnings(state: AgentRuntimeState) -> list[str]:
+    for step in reversed(state.steps):
+        content = step.observation.get("content")
+        if not isinstance(content, dict):
+            continue
+        if content.get("evidence_consistency_resolved"):
+            return []
+        warnings = content.get("evidence_consistency_warnings")
+        if isinstance(warnings, list) and warnings:
+            return [str(warning) for warning in warnings]
+    return []
 
 
 def _evidence_requirement_status(
@@ -1943,7 +2072,9 @@ def _build_planning_context(
         "`EVIDENCE_LEDGER_JSON:` followed by a compact JSON list. Each item should include "
         "`id`, `status` (`verified` or `unresolved`), `source`, and the concrete columns/values/rules used. "
         "Do this before printing `FINAL_TABLE_JSON:` on hard/extreme tasks with ambiguous values, formulas, "
-        "thresholds, or markdown context."
+        "thresholds, or markdown context. If you print a final table after verified evidence, also print "
+        "`EVIDENCE_CONSISTENCY_JSON:` with one item per verified evidence id, marking "
+        "`used_in_final_computation: true` and naming where the rule/value/formula was applied."
     )
     lines.extend(BIRD_SEMANTIC_CONTRACT_LINES)
     if loop_guard.get("triggered"):
@@ -2382,6 +2513,40 @@ class ReActAgent:
                     )
                     continue
 
+                unresolved_consistency = (
+                    _latest_evidence_consistency_warnings(state)
+                    if model_step.action == "answer"
+                    else []
+                )
+                if unresolved_consistency:
+                    observation = {
+                        "ok": False,
+                        "evidence_consistency_recheck": True,
+                        "error": (
+                            "Evidence-to-final consistency guard: a previous Python candidate used "
+                            "verified semantic evidence, but did not prove that the same evidence was "
+                            "applied in the final computation. Do not submit the same table yet. Run "
+                            "one compact Python verification, print EVIDENCE_CONSISTENCY_JSON with "
+                            "used_in_final_computation=true for the relevant evidence ids, and then "
+                            "print FINAL_TABLE_JSON only if the verified computation supports it. "
+                            "Unresolved: " + "; ".join(unresolved_consistency[:4])
+                        ),
+                    }
+                    self._append_step(
+                        task,
+                        state,
+                        StepRecord(
+                            step_index=step_index,
+                            thought=model_step.thought,
+                            action=model_step.action,
+                            action_input=model_step.action_input,
+                            raw_response=raw_response,
+                            observation=observation,
+                            ok=False,
+                        )
+                    )
+                    continue
+
                 tool_result = self.tools.execute(task, model_step.action, model_step.action_input)
                 content = dict(tool_result.content)
                 if model_step.action == "execute_python":
@@ -2397,6 +2562,12 @@ class ReActAgent:
                         evidence_entries = _evidence_entries_from_value(evidence_value)
                         content["evidence_ledger_report"] = (
                             evidence_entries if evidence_entries else evidence_value
+                        )
+                    consistency_value = _find_marker_json_value(stdout, EVIDENCE_CONSISTENCY_MARKERS)
+                    if consistency_value is not None:
+                        consistency_entries = _evidence_entries_from_value(consistency_value)
+                        content["evidence_consistency_report"] = (
+                            consistency_entries if consistency_entries else consistency_value
                         )
                 elif model_step.action == "answer":
                     direct_answer = _answer_table_from_payload(model_step.action_input)
@@ -2427,18 +2598,41 @@ class ReActAgent:
                             "semantic evidence still needs explicit grounding: "
                             + ", ".join(missing_evidence[:4])
                         )
+                    required_consistency_ids, consistency_warnings = _evidence_consistency_warnings(
+                        task,
+                        state,
+                        current_content=content,
+                    )
+                    if consistency_warnings:
+                        content["evidence_consistency_warnings"] = consistency_warnings
+                        review_reasons.extend(consistency_warnings[:3])
+                    elif required_consistency_ids:
+                        content["evidence_consistency_resolved"] = True
                     if review_reasons:
-                        content["candidate_review_instruction"] = (
-                            "Runtime final-answer review: Python printed a plausible final table, "
-                            "but the runtime is not auto-submitting it. Do not run more exploration just because of this. "
-                            "If the candidate columns and rows exactly answer the question, submit `Answer:` "
-                            "with that table now. If a warning identifies a real extra/missing column or wrong "
-                            "row shape, or missing semantic evidence identifies an unresolved mapping/rule, "
-                            "fix that evidence first and submit the corrected table. Candidate preview: "
-                            f"{_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
-                            "Review reasons: "
-                            + "; ".join(review_reasons)
-                        )
+                        if consistency_warnings:
+                            content["candidate_review_instruction"] = (
+                                "Runtime evidence-to-final review: Python printed a plausible final table, "
+                                "but verified semantic evidence was not explicitly tied to the final computation. "
+                                "Do not submit the same table yet. Run one compact Python verification that "
+                                "uses the verified rule/value/formula in the final filter/join/aggregation, print "
+                                "`EVIDENCE_CONSISTENCY_JSON:` with `used_in_final_computation: true`, then print "
+                                "`FINAL_TABLE_JSON:` only if the verified result still supports the table. "
+                                f"Candidate preview: {_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
+                                "Review reasons: "
+                                + "; ".join(review_reasons)
+                            )
+                        else:
+                            content["candidate_review_instruction"] = (
+                                "Runtime final-answer review: Python printed a plausible final table, "
+                                "but the runtime is not auto-submitting it. Do not run more exploration just because of this. "
+                                "If the candidate columns and rows exactly answer the question, submit `Answer:` "
+                                "with that table now. If a warning identifies a real extra/missing column or wrong "
+                                "row shape, or missing semantic evidence identifies an unresolved mapping/rule, "
+                                "fix that evidence first and submit the corrected table. Candidate preview: "
+                                f"{_safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))}. "
+                                "Review reasons: "
+                                + "; ".join(review_reasons)
+                            )
                 step_record = StepRecord(
                     step_index=step_index,
                     thought=model_step.thought,

@@ -14,6 +14,7 @@ from data_agent_baseline.agents.react import (
     ReActAgentConfig,
     _build_planning_context,
     _candidate_decision_from_observation,
+    _evidence_consistency_warnings,
     _final_answer_check,
     _python_repair_hints,
     _render_observation_for_prompt,
@@ -919,6 +920,87 @@ def test_planning_snapshot_includes_evidence_ledger() -> None:
         } <= evidence_ids
         assert "Evidence checklist:" in planning_instruction
         assert "EVIDENCE_LEDGER_JSON" in planning_instruction
+
+
+def test_evidence_consistency_requires_final_computation_link() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_consistency",
+                difficulty="hard",
+                question="Which patients have abnormal PT values?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        content = {
+            "evidence_ledger_report": [
+                {
+                    "id": "semantic_rule_or_threshold",
+                    "status": "verified",
+                    "source": "knowledge.md",
+                    "rule": "abnormal PT means PT >= 14",
+                }
+            ]
+        }
+
+        required_ids, warnings = _evidence_consistency_warnings(
+            task,
+            state,
+            current_content=content,
+        )
+
+        assert required_ids == ["semantic_rule_or_threshold"]
+        assert warnings
+
+        content["evidence_consistency_report"] = [
+            {
+                "evidence_id": "semantic_rule_or_threshold",
+                "used_in_final_computation": True,
+                "where_used": "filtered Examination.PT >= 14 before selecting final IDs",
+            }
+        ]
+        _, resolved_warnings = _evidence_consistency_warnings(
+            task,
+            state,
+            current_content=content,
+        )
+
+        assert resolved_warnings == []
+
+
+def test_candidate_with_evidence_consistency_warning_is_not_fallback() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_consistency_candidate",
+                difficulty="hard",
+                question="Which patients have abnormal PT values?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        answer = AnswerTable(columns=["ID"], rows=[[1], [2]])
+        decision = _candidate_decision_from_observation(
+            task,
+            {
+                "ok": True,
+                "tool": "execute_python",
+                "content": {
+                    "output": "",
+                    "evidence_consistency_warnings": [
+                        "missing EVIDENCE_CONSISTENCY_JSON"
+                    ],
+                    "candidate_review_instruction": "verify consistency first",
+                },
+            },
+            answer,
+        )
+
+        assert decision.auto_submit is False
+        assert decision.store_as_fallback is False
+        assert "evidence_consistency_warnings_present" in decision.reasons
 
 
 def test_loop_guard_warns_after_repeated_python_execution() -> None:
