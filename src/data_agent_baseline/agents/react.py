@@ -58,6 +58,11 @@ SOURCE_MAP_MARKERS = (
 
 PLANNING_DIFFICULTIES = {"medium", "hard", "extreme"}
 LINKING_REQUIREMENT_DIFFICULTIES = {"hard", "extreme"}
+CANDIDATE_VERIFICATION_DIFFICULTIES = {"hard", "extreme"}
+CANDIDATE_VERIFICATION_REQUIRED_KEYS = (
+    "candidate_verification_required",
+    "hard_candidate_verification_required",
+)
 SPECIAL_EVIDENCE_IDS = {
     "value_entity_linking",
     "semantic_rule_or_threshold",
@@ -543,6 +548,10 @@ def _task_is_hard(task: PublicTask) -> bool:
     return task.difficulty.casefold() == "hard"
 
 
+def _task_needs_candidate_verification(task: PublicTask) -> bool:
+    return task.difficulty.casefold() in CANDIDATE_VERIFICATION_DIFFICULTIES
+
+
 def _deduplicate_answer_rows(answer: AnswerTable) -> AnswerTable:
     seen: set[tuple[object, ...]] = set()
     rows: list[list[object]] = []
@@ -844,9 +853,9 @@ def _candidate_decision_from_observation(
     if content_dict.get("candidate_review_instruction"):
         reasons.append("candidate_review_required")
         hard_reasons.append("candidate_review_required")
-    if content_dict.get("hard_candidate_verification_required"):
-        reasons.append("hard_candidate_verification_required")
-        hard_reasons.append("hard_candidate_verification_required")
+    if _content_requires_candidate_verification(content_dict):
+        reasons.append("candidate_verification_required")
+        hard_reasons.append("candidate_verification_required")
     if len(answer.rows) <= 20:
         reasons.append("small_candidate_requires_model_review")
         hard_reasons.append("small_candidate_requires_model_review")
@@ -1710,7 +1719,11 @@ def _answer_is_submission_ready(task: PublicTask, answer: AnswerTable) -> bool:
     )
 
 
-def _hard_candidate_verification_requests(state: AgentRuntimeState) -> list[StepRecord]:
+def _content_requires_candidate_verification(content: dict[str, object]) -> bool:
+    return any(bool(content.get(key)) for key in CANDIDATE_VERIFICATION_REQUIRED_KEYS)
+
+
+def _candidate_verification_requests(state: AgentRuntimeState) -> list[StepRecord]:
     requests: list[StepRecord] = []
     for step in state.steps:
         observation = step.observation
@@ -1719,16 +1732,16 @@ def _hard_candidate_verification_requests(state: AgentRuntimeState) -> list[Step
         content = observation.get("content")
         if not isinstance(content, dict):
             continue
-        if content.get("hard_candidate_verification_required"):
+        if _content_requires_candidate_verification(content):
             requests.append(step)
     return requests
 
 
-def _hard_candidate_verification_seen(state: AgentRuntimeState) -> bool:
-    return bool(_hard_candidate_verification_requests(state))
+def _candidate_verification_seen(state: AgentRuntimeState) -> bool:
+    return bool(_candidate_verification_requests(state))
 
 
-def _hard_candidate_verification_completed_after(
+def _candidate_verification_completed_after(
     state: AgentRuntimeState,
     request_step_index: int,
 ) -> bool:
@@ -1740,17 +1753,21 @@ def _hard_candidate_verification_completed_after(
     )
 
 
-def _hard_candidate_pending_verification(task: PublicTask, state: AgentRuntimeState) -> bool:
-    if not _task_is_hard(task):
+def _candidate_pending_verification(task: PublicTask, state: AgentRuntimeState) -> bool:
+    if not _task_needs_candidate_verification(task):
         return False
-    requests = _hard_candidate_verification_requests(state)
+    requests = _candidate_verification_requests(state)
     if not requests:
         return False
     latest_request = requests[-1]
-    return not _hard_candidate_verification_completed_after(
+    return not _candidate_verification_completed_after(
         state,
         latest_request.step_index,
     )
+
+
+def _hard_candidate_pending_verification(task: PublicTask, state: AgentRuntimeState) -> bool:
+    return _candidate_pending_verification(task, state)
 
 
 def _latest_candidate_review_instruction(state: AgentRuntimeState) -> str | None:
@@ -1762,8 +1779,8 @@ def _latest_candidate_review_instruction(state: AgentRuntimeState) -> str | None
         if not isinstance(content, dict):
             continue
         if (
-            content.get("hard_candidate_verification_required")
-            and _hard_candidate_verification_completed_after(state, step.step_index)
+            _content_requires_candidate_verification(content)
+            and _candidate_verification_completed_after(state, step.step_index)
         ):
             continue
         instruction = content.get("candidate_review_instruction")
@@ -1802,7 +1819,7 @@ def _should_block_hard_unverified_answer(
 ) -> bool:
     return (
         model_step.action == "answer"
-        and _hard_candidate_pending_verification(task, state)
+        and _candidate_pending_verification(task, state)
     )
 
 
@@ -1845,7 +1862,7 @@ def _should_prioritize_answer_submission(
     max_steps: int,
 ) -> bool:
     _ = step_index, max_steps
-    if _hard_candidate_pending_verification(task, state):
+    if _candidate_pending_verification(task, state):
         return False
     return _latest_submission_ready_candidate(task, state, fallback_answer) is not None
 
@@ -2609,12 +2626,13 @@ class ReActAgent:
                     continue
 
                 if _should_block_hard_unverified_answer(task, state, model_step):
+                    difficulty = task.difficulty.casefold()
                     observation = {
                         "ok": False,
-                        "hard_candidate_answer_blocked": True,
+                        "candidate_answer_blocked": True,
                         "error": (
-                            "Hard candidate verification guard: a Python final-table candidate was produced, "
-                            "but this hard task needs one independent evidence check before final submission. "
+                            "Candidate verification guard: a Python final-table candidate was produced, "
+                            f"but this {difficulty} task needs one independent evidence check before final submission. "
                             "Run one compact Python verification/recomputation using observed tables, columns, "
                             "values, joins, filters, row grain, and calculations. Print `FINAL_TABLE_JSON:` "
                             "only if the independently verified table is exact."
@@ -2687,14 +2705,16 @@ class ReActAgent:
                             "semantic evidence still needs explicit grounding: "
                             + ", ".join(missing_evidence[:4])
                         )
-                    hard_verification_required = (
-                        _task_is_hard(task)
-                        and not _hard_candidate_verification_seen(state)
+                    candidate_verification_required = (
+                        _task_needs_candidate_verification(task)
+                        and not _candidate_verification_seen(state)
                     )
-                    if hard_verification_required:
-                        content["hard_candidate_verification_required"] = True
+                    if candidate_verification_required:
+                        difficulty = task.difficulty.casefold()
+                        content["candidate_verification_required"] = True
+                        content["candidate_verification_difficulty"] = difficulty
                         review_reasons.append(
-                            "hard task first final-table candidate needs independent evidence verification"
+                            f"{difficulty} task first final-table candidate needs independent evidence verification"
                         )
                     if (
                         _task_is_medium(task)
@@ -2708,10 +2728,11 @@ class ReActAgent:
                         review_reasons.append("candidate has <=20 rows, so the model should confirm final shape")
                     if review_reasons:
                         preview = _safe_json_dumps(_answer_preview(candidate_answer, max_rows=3))
-                        if hard_verification_required:
+                        if candidate_verification_required:
+                            difficulty = task.difficulty.casefold()
                             content["candidate_review_instruction"] = (
-                                "Hard-only candidate verifier: Python printed the first plausible final table "
-                                "for this hard task, but the runtime is deliberately not submitting it yet. "
+                                "Hard/extreme candidate verifier: Python printed the first plausible final table "
+                                f"for this {difficulty} task, but the runtime is deliberately not submitting it yet. "
                                 "Do not submit `Answer:` in the next step. Run one compact, independent Python "
                                 "verification or recomputation that checks the actual tables/columns, filter "
                                 "values, joins, row grain, calculations, and final columns against observed data. "
