@@ -251,25 +251,6 @@ ROW_MATCH_GENERIC_TOKENS = {
     "type",
     "year",
 }
-MARKDOWN_ENTITY_TABLE_FIELDS = {
-    "alignment_id",
-    "alp",
-    "birth_year",
-    "cards_id",
-    "creatinine",
-    "got",
-    "gpt",
-    "height_cm",
-    "ldh",
-    "patient_id",
-    "publisher_id",
-    "record_year",
-    "sex",
-    "t_bil",
-    "urea_nitrogen",
-    "uric_acid",
-    "weight_kg",
-}
 
 
 def _question_markdown_terms(question: str) -> list[str]:
@@ -522,29 +503,98 @@ def extract_markdown_records(
     return results
 
 
-PATIENT_ID_PATTERNS = (
-    re.compile(r"\bpatient\s+(\d{2,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bMedical Record Number\s+(\d{2,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bfile(?:\s+number)?\s+(\d{2,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bfile\s+for\s+patient\s+(\d{2,})\b", flags=re.IGNORECASE),
-)
-ENTITY_ID_PATTERNS = (
-    re.compile(r"\bregistered under (?:the )?(?:unique )?identifier\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bregistered under (?:the )?(?:unique )?ID\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bregistration number\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bregistry number\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bRegistry Ref:\s*(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\breference(?:\s+code|\s+ID)?\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\breference number\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bregistered with identifier\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\btracked (?:with|under) identifier\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\btracked under reference ID\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bcatalog(?:ed|ued) (?:with|under) (?:registry number|reference code|reference number|identifier)\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bfiled under ID\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bunder ID\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bstrategic unit ID\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\blegality (?:entry|ruling) ID\s+(\d{1,})\b", flags=re.IGNORECASE),
-    re.compile(r"\bID\s+(\d{1,})\b", flags=re.IGNORECASE),
+MARKDOWN_FIELD_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "both",
+    "but",
+    "by",
+    "cataloged",
+    "catalogued",
+    "code",
+    "confirmed",
+    "corrected",
+    "field",
+    "fields",
+    "filed",
+    "for",
+    "from",
+    "has",
+    "have",
+    "her",
+    "his",
+    "id",
+    "in",
+    "initially",
+    "is",
+    "it",
+    "its",
+    "later",
+    "listed",
+    "logged",
+    "of",
+    "on",
+    "recorded",
+    "reported",
+    "registered",
+    "revealed",
+    "she",
+    "stored",
+    "st",
+    "that",
+    "the",
+    "their",
+    "th",
+    "to",
+    "tracked",
+    "under",
+    "unique",
+    "value",
+    "was",
+    "were",
+    "with",
+    "nd",
+    "rd",
+}
+MONTH_WORDS = {
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+}
+GENERIC_ID_PATTERNS = (
+    re.compile(
+        r"\b(?:registered|tracked|filed|catalog(?:ed|ued)|stored|listed)\s+"
+        r"(?:under|with|as)\s+(?:the\s+)?(?:unique\s+)?"
+        r"(?P<kind>identifier|reference|number|code|ref|id)\b\s+"
+        r"(?P<value>[A-Za-z0-9_.:-]+)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?P<label>[A-Za-z][A-Za-z0-9_ -]{0,45}?)\s+"
+        r"(?P<kind>identifier|reference|number|code|ref|id)\b\s*[:#=]?\s*"
+        r"(?P<value>[A-Za-z0-9_.:-]+)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?P<kind>identifier|reference|number|code|ref|id)\b\s*[:#=]?\s*"
+        r"(?P<value>[A-Za-z0-9_.:-]+)\b",
+        flags=re.IGNORECASE,
+    ),
 )
 
 
@@ -569,97 +619,178 @@ def _coerce_number(value: object) -> object:
     return number
 
 
+def _field_name_from_label(label: str, *, suffix: str | None = None) -> str | None:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", label)
+    split_parts = re.split(r"\b(?:that|where|whose)\s+(?:the|a|an)\s+", spaced, flags=re.IGNORECASE)
+    if len(split_parts) > 1:
+        spaced = split_parts[-1]
+    spaced = re.sub(r"[_/()-]+", " ", spaced)
+    tokens = [
+        token.casefold()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", spaced)
+        if token.casefold() not in MARKDOWN_FIELD_STOPWORDS
+        and token.casefold() not in MONTH_WORDS
+    ]
+    if not tokens:
+        return None
+    if len(tokens) > 5:
+        tokens = tokens[-5:]
+    if suffix is not None and tokens[-1] != suffix:
+        tokens.append(suffix)
+    return "_".join(tokens)
+
+
+def _coerce_markdown_value(value: str) -> object:
+    cleaned = value.strip().strip("`\"'.,;")
+    if not cleaned:
+        return ""
+    if cleaned.casefold() in {"none", "null", "nan", "n/a", "na", "not available", "unavailable", "-"}:
+        return None
+    numeric_match = re.fullmatch(
+        r"\s*(?:[$]\s*)?([-+]?\d[\d,]*(?:\.\d+)?\s*%?)\s*(?:[A-Za-z/%.-]{1,20})?\s*",
+        cleaned,
+    )
+    if numeric_match is not None:
+        return _coerce_number(numeric_match.group(1))
+    return cleaned
+
+
+def _store_markdown_field(fields: dict[str, object], key: str | None, value: object) -> None:
+    if key is None or value == "":
+        return
+    if key not in fields or fields[key] is None or fields[key] == "" or fields[key] == []:
+        fields[key] = value
+
+
+def _extract_generic_id_fields(text: str) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for pattern in GENERIC_ID_PATTERNS:
+        for match in pattern.finditer(text):
+            value = _coerce_markdown_value(match.group("value"))
+            label = match.groupdict().get("label")
+            kind = match.group("kind").casefold()
+            if label:
+                suffix = "code" if kind == "code" else "id"
+                key = _field_name_from_label(label, suffix=suffix)
+            else:
+                key = "id" if kind in {"id", "identifier"} else _field_name_from_label(kind)
+            _store_markdown_field(fields, key, value)
+
+    # Generic "entity 12345" form. This is intentionally syntax-based, not
+    # domain-based: the noun becomes the identifier field name.
+    for match in re.finditer(r"\b([A-Za-z][A-Za-z0-9_]{2,40})\s+([A-Za-z]?\d{2,}[A-Za-z0-9_.:-]*)\b", text):
+        label = match.group(1)
+        lowered = label.casefold()
+        if lowered in MARKDOWN_FIELD_STOPWORDS or lowered in MONTH_WORDS:
+            continue
+        key = _field_name_from_label(label, suffix="id")
+        _store_markdown_field(fields, key, _coerce_markdown_value(match.group(2)))
+    return fields
+
+
+def _extract_key_value_fields(text: str) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    key_value_pattern = re.compile(
+        r"(?:^|[\n;|])\s*[-*]?\s*"
+        r"(?P<label>[A-Za-z][A-Za-z0-9_ /().-]{1,60})"
+        r"\s*(?:[:=]|[-]\s+)\s*"
+        r"(?P<value>[^\n;|]{1,120})",
+        flags=re.MULTILINE,
+    )
+    for match in key_value_pattern.finditer(text):
+        key = _field_name_from_label(match.group("label"))
+        value = _coerce_markdown_value(match.group("value"))
+        _store_markdown_field(fields, key, value)
+    return fields
+
+
+def _score_markdown_number(sentence: str, match: re.Match[str]) -> float:
+    near_window = sentence[max(0, match.start() - 90) : match.end() + 90].casefold()
+    immediate_before = sentence[max(0, match.start() - 45) : match.start()].casefold()
+    immediate_after = sentence[match.end() : match.end() + 45].casefold()
+    score = float(match.start())
+    if re.search(r"\b(?:verified|confirmed|corrected|adjusted|amended|rectified|finalized|final|accurate|precise)\b", near_window):
+        score += 120.0
+    if re.search(r"\b(?:initial|initially|preliminary|first|originally|estimated|thought|misread|mistaken|error|incorrect)\b", near_window):
+        score -= 40.0
+    if re.search(r"\b(?:verified|confirmed|corrected|adjusted|amended|rectified|finalized|final|accurate|precise)\s+(?:at|to|as|value of|figure of)?\s*$", immediate_before):
+        score += 80.0
+    if re.search(r"^\s*(?:was|were)?\s*(?:later|subsequently)?\s*(?:corrected|adjusted|confirmed|verified|amended|rectified)", immediate_after):
+        score += 60.0
+    return score
+
+
+def _label_for_number(sentence: str, number_start: int) -> str | None:
+    left = sentence[:number_start]
+    earlier_measurement = list(
+        re.finditer(
+            r"\b(?:the|a|an|its|their|his|her)?\s*([A-Za-z][A-Za-z0-9_ /-]{1,80}?)\s*,\s*"
+            r"(?:initially|originally|first|preliminarily|previously)",
+            left,
+            flags=re.IGNORECASE,
+        )
+    )
+    for match in reversed(earlier_measurement):
+        key = _field_name_from_label(match.group(1))
+        if key is not None:
+            return key
+
+    patterns = (
+        r"\b(?:the|a|an|its|their|his|her)?\s*([A-Za-z][A-Za-z0-9_ /-]{1,60}?)\s+"
+        r"(?:is|was|were|are|has been|had been)\s+"
+        r"(?:initially\s+)?(?:estimated|recorded|logged|confirmed|verified|measured|reported|revealed|listed|stored|set|updated|corrected)?\s*"
+        r"(?:as|at|to|with(?:\s+the)?\s+code|of)?\s*$",
+        r"\b(?:has|have|had|with|contains|includes)\s+(?:a|an|the)?\s*"
+        r"([A-Za-z][A-Za-z0-9_ /-]{1,50}?)(?:\s+that|\s+which|\s+of|\s*$)",
+        r"\b([A-Za-z][A-Za-z0-9_ /-]{1,50})\s*,\s*(?:initially|originally|later|subsequently|was|were|is|are)",
+    )
+    for pattern in patterns:
+        matches = list(re.finditer(pattern, left, flags=re.IGNORECASE))
+        for match in reversed(matches):
+            key = _field_name_from_label(match.group(1))
+            if key is not None:
+                return key
+
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", left[-80:])
+        if token.casefold() not in MARKDOWN_FIELD_STOPWORDS
+        and token.casefold() not in MONTH_WORDS
+    ]
+    if tokens:
+        return _field_name_from_label(tokens[-1])
+    return None
+
+
+def _extract_numeric_sentence_fields(text: str) -> dict[str, object]:
+    best: dict[str, tuple[float, object]] = {}
+    for sentence in _split_markdown_sentences(text):
+        for match in MARKDOWN_NUMBER_PATTERN.finditer(sentence):
+            immediate_after = sentence[match.end() : match.end() + 3].casefold()
+            if re.match(r"\s*(?:st|nd|rd|th)\b", immediate_after):
+                continue
+            immediate_before = sentence[max(0, match.start() - 25) : match.start()].casefold()
+            if re.search(r"\b(?:id|identifier|reference|ref|number)\s*[:#=]?\s*$", immediate_before):
+                continue
+            key = _label_for_number(sentence, match.start())
+            if key is None:
+                continue
+            value = _coerce_number(match.group(0))
+            if value is None:
+                continue
+            if isinstance(value, str):
+                continue
+            if isinstance(value, int) and 1800 <= value <= 2099 and not key.endswith("_year"):
+                key = f"{key}_year"
+            score = _score_markdown_number(sentence, match)
+            if key not in best or score > best[key][0]:
+                best[key] = (score, value)
+    return {key: value for key, (_, value) in best.items()}
+
+
 def _split_markdown_sentences(text: str) -> list[str]:
     pieces = re.split(r"(?<=[.!?])\s+", text.replace("\r", " ").replace("\n", " "))
     return [piece.strip() for piece in pieces if piece.strip()]
-
-
-def _best_number_near_terms(
-    text: str,
-    term_patterns: tuple[str, ...],
-    *,
-    unit_terms: tuple[str, ...] = (),
-) -> object | None:
-    best: tuple[float, int, object] | None = None
-    for sentence_index, sentence in enumerate(_split_markdown_sentences(text)):
-        lowered = sentence.casefold()
-        term_spans: list[tuple[int, int]] = []
-        for pattern in term_patterns:
-            term_spans.extend((match.start(), match.end()) for match in re.finditer(pattern, lowered))
-        if not term_spans:
-            continue
-
-        for match in MARKDOWN_NUMBER_PATTERN.finditer(sentence):
-            raw_value = match.group(0)
-            value = _coerce_number(raw_value)
-            if value is None:
-                continue
-            near_window = sentence[max(0, match.start() - 80) : match.end() + 80].casefold()
-            if unit_terms and not any(unit in near_window for unit in unit_terms):
-                continue
-            nearest_term = min(
-                term_spans,
-                key=lambda span: min(abs(match.start() - span[0]), abs(match.end() - span[1])),
-            )
-            distance = min(abs(match.start() - nearest_term[0]), abs(match.end() - nearest_term[1]))
-            score = -float(distance)
-            if nearest_term[1] <= match.start():
-                score += 20.0
-            elif match.end() < nearest_term[0]:
-                score -= 180.0
-            immediate_before = sentence[max(0, match.start() - 45) : match.start()].casefold()
-            immediate_after = sentence[match.end() : match.end() + 45].casefold()
-            if re.search(r"\b(?:verified|confirmed|corrected|adjusted|amended|rectified|finalized|final|accurate|precise)\s+(?:at|to|as|value of|figure of)?\s*$", immediate_before):
-                score += 120.0
-            if re.search(r"\b(?:initial|initially|preliminary|first|originally|estimated|thought|misread|mistaken|error)\b", immediate_before):
-                score -= 120.0
-            if re.search(r"^\s*(?:was|were)?\s*(?:later|subsequently)?\s*(?:corrected|adjusted|confirmed|verified|amended|rectified)", immediate_after):
-                score += 60.0
-            if re.search(r"\b(?:corrected|confirmed|verified|final|finalized|accurate|precise|rectified|updated|amended|current)\b", near_window):
-                score += 80.0
-            if re.search(r"\b(?:initial|initially|preliminary|estimated|misread|mistakenly|error|incorrect)\b", near_window):
-                score -= 25.0
-            if re.search(r"\b(?:not available|unavailable|nan|none|null|missing)\b", near_window):
-                score += 5.0
-            tie_breaker = (sentence_index * 1000) + match.start()
-            if best is None or (score, tie_breaker) > (best[0], best[1]):
-                best = (score, tie_breaker, value)
-    return None if best is None else best[2]
-
-
-def _best_year_near_terms(text: str, term_patterns: tuple[str, ...]) -> int | None:
-    best: tuple[float, int, int] | None = None
-    for sentence_index, sentence in enumerate(_split_markdown_sentences(text)):
-        lowered = sentence.casefold()
-        term_spans: list[tuple[int, int]] = []
-        for pattern in term_patterns:
-            term_spans.extend((match.start(), match.end()) for match in re.finditer(pattern, lowered))
-        if not term_spans:
-            continue
-        for match in re.finditer(r"\b(18\d{2}|19\d{2}|20\d{2})\b", sentence):
-            year = int(match.group(1))
-            distance = min(
-                min(abs(match.start() - term_start), abs(match.end() - term_end))
-                for term_start, term_end in term_spans
-            )
-            score = -float(distance)
-            near_window = sentence[max(0, match.start() - 90) : match.end() + 90].casefold()
-            if re.search(r"\b(?:corrected|confirmed|verified|official|correct|rectified|amended)\b", near_window):
-                score += 40.0
-            if re.search(r"\b(?:initial|preliminary|mistakenly|error|suggested)\b", near_window):
-                score -= 20.0
-            tie_breaker = (sentence_index * 1000) + match.start()
-            if best is None or (score, tie_breaker) > (best[0], best[1]):
-                best = (score, tie_breaker, year)
-    return None if best is None else best[2]
-
-
-def _first_regex_group(patterns: tuple[re.Pattern[str], ...], text: str) -> str | None:
-    for pattern in patterns:
-        match = pattern.search(text)
-        if match is not None:
-            return match.group(1).strip()
-    return None
 
 
 def _clean_markdown_entity_name(value: str) -> str:
@@ -672,8 +803,8 @@ def _extract_markdown_names(text: str) -> dict[str, object]:
     fields: dict[str, object] = {}
     name_patterns = (
         r"\b(?:known as|designated|called)\s+([A-Z][A-Za-z0-9'(). -]{1,60})",
+        r"\b(?:named|name is|name as)\s+([A-Z][A-Za-z0-9'(). -]{1,60})",
         r"\b(?:codename|alias)\s+(?:is\s+|as\s+)?([A-Z][A-Za-z0-9'(). -]{1,60})",
-        r"\b(?:asset|operative|unit|entity|individual|subject)\s+(?:known as|designated|called)\s+([A-Z][A-Za-z0-9'(). -]{1,60})",
     )
     for pattern in name_patterns:
         match = re.search(pattern, text)
@@ -684,12 +815,11 @@ def _extract_markdown_names(text: str) -> dict[str, object]:
                 break
 
     full_name_patterns = (
-        r"\bfull legal name (?:of|to be|is|as)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
-        r"\b(?:full name|complete legal name).{0,90}?\b(?:recorded as|documented as|confirmed as|listed as|updated.{0,30}?to(?: reflect)?|to be|is)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
-        r"\b(?:full name|civilian identity).{0,90}?\b(?:marked as|logged as|listed as)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
+        r"\b(?:full name|complete name|display name).{0,90}?\b(?:recorded as|documented as|confirmed as|listed as|updated.{0,30}?to(?: reflect)?|to be|is|as)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
+        r"\b(?:name).{0,40}?\b(?:marked as|logged as|listed as|recorded as)\s+([A-Z][A-Za-z'(). -]{1,80}|None|-)\b",
     )
     for sentence in _split_markdown_sentences(text):
-        if not re.search(r"\b(?:full name|complete legal name|civilian identity)\b", sentence, flags=re.IGNORECASE):
+        if not re.search(r"\b(?:full name|complete name|display name|name)\b", sentence, flags=re.IGNORECASE):
             continue
         for pattern in full_name_patterns:
             match = re.search(pattern, sentence, flags=re.IGNORECASE)
@@ -701,8 +831,6 @@ def _extract_markdown_names(text: str) -> dict[str, object]:
 
 def _extract_markdown_block_fields(text: str) -> dict[str, object]:
     fields: dict[str, object] = {}
-    patient_id = _first_regex_group(PATIENT_ID_PATTERNS, text)
-    cards_id = re.search(r"\bcards_id\s+(\d{1,})\b", text, flags=re.IGNORECASE)
     record_ids = []
     seen_record_ids: set[str] = set()
     for match in RECORD_ID_PATTERN.finditer(text):
@@ -711,77 +839,27 @@ def _extract_markdown_block_fields(text: str) -> dict[str, object]:
             seen_record_ids.add(value.casefold())
             record_ids.append(value)
 
-    if patient_id is not None:
-        fields["patient_id"] = int(patient_id)
-    else:
-        entity_id = _first_regex_group(ENTITY_ID_PATTERNS, text)
-        if entity_id is not None:
-            fields["id"] = int(entity_id)
-    if cards_id is not None:
-        fields["cards_id"] = int(cards_id.group(1))
     if record_ids:
         fields["record_ids"] = record_ids[:8]
 
+    fields.update(_extract_key_value_fields(text))
+    fields.update(_extract_generic_id_fields(text))
     fields.update(_extract_markdown_names(text))
-
-    sex_sentence = " ".join(
-        sentence
-        for sentence in _split_markdown_sentences(text)
-        if re.search(r"\b(?:male|female|gender|sex)\b", sentence, flags=re.IGNORECASE)
-    ).casefold()
-    if "female" in sex_sentence:
-        fields["sex"] = "F"
-    elif re.search(r"\bmale\b", sex_sentence):
-        fields["sex"] = "M"
-
-    birthday_year = _best_year_near_terms(text, (r"\bborn\b", r"\bbirthdate\b", r"\bbirthday\b", r"\bdate of birth\b"))
-    if birthday_year is not None:
-        fields["birth_year"] = birthday_year
-    record_year = _best_year_near_terms(text, (r"\bsample\b", r"\btested\b", r"\bassessed\b", r"\bdated\b", r"\brecorded\b", r"\bfrom\b", r"\bon\b"))
-    if record_year is not None:
-        fields["record_year"] = record_year
-
-    for sentence in _split_markdown_sentences(text):
-        lowered_sentence = sentence.casefold()
-        if (
-            "height" in lowered_sentence
-            and "weight" in lowered_sentence
-            and re.search(r"\b(?:both|placeholder|listed|recorded|fields?)\b", lowered_sentence)
-        ):
-            if re.search(r"\b0(?:\.0+)?\b", lowered_sentence):
-                fields.setdefault("height_cm", 0)
-                fields.setdefault("weight_kg", 0)
-            elif re.search(r"\b(?:nan|not available|unavailable)\b", lowered_sentence):
-                fields.setdefault("height_cm", None)
-                fields.setdefault("weight_kg", None)
-
-    numeric_specs = {
-        "height_cm": ((r"\bheight\b", r"\bstanding height\b"), ("centimeter", "centimeters", "cm")),
-        "weight_kg": ((r"\bweight\b",), ("kilogram", "kilograms", "kg")),
-        "publisher_id": ((r"\bpublisher affiliation\b", r"\bpublisher code\b", r"\bwith publisher\b", r"\bunder publisher\b", r"\bpublisher\b"), ()),
-        "alignment_id": ((r"\bmoral alignment\b", r"\balignment\b"), ()),
-        "creatinine": ((r"\bcreatinine\b", r"\bcre\b"), ("mg/dl",)),
-        "uric_acid": ((r"\buric acid\b", r"\bua\b"), ("mg/dl",)),
-        "urea_nitrogen": ((r"\burea nitrogen\b", r"\bun\b"), ("mg/dl",)),
-        "got": ((r"\bgot\b", r"\bglutamic oxaloacetic transaminase\b"), ("u/l",)),
-        "gpt": ((r"\bgpt\b", r"\bglutamic pyruvic transaminase\b"), ("u/l",)),
-        "ldh": ((r"\bldh\b", r"\blactate dehydrogenase\b"), ("u/l",)),
-        "alp": ((r"\balp\b", r"\balkaline phosphatase\b"), ("u/l",)),
-        "t_bil": ((r"\bt-bil\b", r"\btotal bilirubin\b"), ("mg/dl",)),
-    }
-    for field, (patterns, units) in numeric_specs.items():
-        if field in fields:
-            continue
-        value = _best_number_near_terms(text, patterns, unit_terms=units)
-        if value is not None:
-            fields[field] = value
+    for key, value in _extract_numeric_sentence_fields(text).items():
+        fields.setdefault(key, value)
+    for key in list(fields):
+        id_key = f"{key}_id"
+        if id_key in fields and fields[key] == fields[id_key]:
+            del fields[key]
     return fields
 
 
 def _markdown_entity_key(fields: dict[str, object]) -> str | None:
-    for key in ("patient_id", "id", "cards_id"):
+    for key in sorted(fields):
+        if key != "id" and not _column_looks_like_id(key, fields.get(key, "")):
+            continue
         value = fields.get(key)
-        if value not in {None, ""}:
+        if value is not None and value != "":
             return f"{key}:{value}"
     record_ids = fields.get("record_ids")
     if isinstance(record_ids, list) and record_ids:
@@ -1544,9 +1622,9 @@ def _markdown_entity_table_is_relevant(
     if question_tokens & field_tokens:
         return True
 
-    identifier_fields = {"id", "patient_id", "cards_id", "record_ids"}
+    identifier_fields = {field for field in fields if field == "record_ids" or _column_looks_like_id(field)}
     non_identifier_fields = fields - identifier_fields
-    if len(non_identifier_fields) >= 2 and fields & identifier_fields:
+    if len(non_identifier_fields) >= 2 and identifier_fields:
         return True
     if record_count >= 2 and non_identifier_fields:
         return True

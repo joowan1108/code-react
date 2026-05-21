@@ -1204,6 +1204,47 @@ def test_knowledge_reminder_skips_non_hard_tasks() -> None:
         assert "Knowledge note:" not in prompt
 
 
+def test_easy_codeact_prompt_uses_light_fast_path() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "data.csv").write_text("id,value\n1,10\n", encoding="utf-8")
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_easy_fast",
+                difficulty="easy",
+                question="Return the value for id 1.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "Easy task fast path" in prompt
+        assert "requested final columns, the source file/table" in prompt
+        assert "ground structured-data semantics with a compact source map" not in prompt
+        assert "grouping or sorting keys, calculations, and row grain" not in prompt
+
+
+def test_medium_codeact_prompt_keeps_compact_source_map() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        (context_path / "data.csv").write_text("group,score\nA,10\n", encoding="utf-8")
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_medium_grounding",
+                difficulty="medium",
+                question="Return the average score by group.",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+
+        prompt = build_task_prompt(task, codeact=True)
+
+        assert "Easy task fast path" not in prompt
+        assert "ground structured-data semantics with a compact source map" in prompt
+        assert "grouping or sorting keys, calculations, and row grain" in prompt
+
+
 def test_knowledge_reminder_skips_format_only_hard_tasks() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
@@ -1762,14 +1803,14 @@ def test_markdown_entity_table_merges_prose_sections_by_id() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         (context_path / "doc").mkdir()
-        (context_path / "doc" / "heroes.md").write_text(
-            "The operative Alpha, registered under ID 7, has a height that was initially "
+        (context_path / "doc" / "items.md").write_text(
+            "The item Alpha, registered under ID 7, has a height that was initially "
             "estimated at 170.0 centimeters but later confirmed at 175.0 centimeters. "
-            "Her weight is recorded as 60.0 kilograms.\n\n"
-            "The file for the operative Alpha, registered under the unique identifier 7, "
-            "contains classification data. Her publisher affiliation is logged with the code 13.\n\n"
-            "The operative Beta, registered under ID 8, has a height of 190.0 centimeters. "
-            "His publisher affiliation is recorded as 4.\n",
+            "Its weight is recorded as 60.0 kilograms.\n\n"
+            "The item Alpha, registered under the unique identifier 7, "
+            "contains classification data. Its source affiliation is logged with the code 13.\n\n"
+            "The entity Beta, registered under ID 8, has a height of 190.0 centimeters. "
+            "Its source affiliation is recorded as 4.\n",
             encoding="utf-8",
         )
 
@@ -1781,29 +1822,29 @@ def test_markdown_entity_table_merges_prose_sections_by_id() -> None:
                 "print(json.dumps(rows, ensure_ascii=False, sort_keys=True))\n"
             ),
             timeout_seconds=10,
-            question="What percentage of heroes with height between 150 and 180 are publisher 13?",
+            question="What percentage of items with height between 150 and 180 have source affiliation 13?",
         )
 
         assert result["success"]
         rows = json.loads(result["output"])
         alpha = next(row for row in rows if row.get("id") == 7)
-        assert alpha["height_cm"] == 175
-        assert alpha["publisher_id"] == 13
-        assert alpha["weight_kg"] == 60
+        assert alpha["height"] == 175
+        assert alpha["source_affiliation"] == 13
+        assert alpha["weight"] == 60
 
 
-def test_markdown_entity_table_extracts_patient_birth_and_creatinine() -> None:
+def test_markdown_entity_table_extracts_generic_dates_and_measurements() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         context_path = Path(temp_dir)
         (context_path / "doc").mkdir()
-        (context_path / "doc" / "Patient.md").write_text(
-            "The profile for patient 12345 confirms she is female, born on July 20th, 1972. "
+        (context_path / "doc" / "Profile.md").write_text(
+            "The profile for subject 12345 confirms the subject was born on July 20th, 1972. "
             "Her chart was created on March 4th, 1994.\n",
             encoding="utf-8",
         )
-        (context_path / "doc" / "Laboratory.md").write_text(
-            "The renal panel for patient 12345 revealed that the creatinine, initially "
-            "thought to be 1.1 mg/dL, was verified at 1.6 mg/dL. The urea nitrogen was 18.0 mg/dL.\n",
+        (context_path / "doc" / "Measurements.md").write_text(
+            "The score panel for subject 12345 revealed that the sample score, initially "
+            "thought to be 1.1 units, was verified at 1.6 units. The auxiliary value was 18.0 units.\n",
             encoding="utf-8",
         )
 
@@ -1816,16 +1857,16 @@ def test_markdown_entity_table_extracts_patient_birth_and_creatinine() -> None:
                 "print(json.dumps(rows, ensure_ascii=False, sort_keys=True))\n"
             ),
             timeout_seconds=10,
-            question="Among patients with abnormal creatinine, how many are not 70 yet?",
+            question="Among subjects with abnormal sample score, how many are not 70 yet?",
         )
 
         assert result["success"]
         rows = json.loads(result["output"])
-        patient = next(row for row in rows if row.get("patient_id") == 12345)
-        assert patient["birth_year"] == 1972
-        assert patient["sex"] == "F"
-        assert patient["creatinine"] == 1.6
-        assert patient["urea_nitrogen"] == 18
+        subject = next(row for row in rows if row.get("subject_id") == 12345)
+        assert subject["born_year"] == 1972
+        assert subject["created_year"] == 1994
+        assert subject["sample_score"] == 1.6
+        assert subject["auxiliary"] == 18
 
         links = json.loads(
             execute_python_code(
@@ -1835,10 +1876,10 @@ def test_markdown_entity_table_extracts_patient_birth_and_creatinine() -> None:
                     "print(json.dumps(link_question_to_data(max_candidates=5), ensure_ascii=False))\n"
                 ),
                 timeout_seconds=10,
-                question="Among patients with abnormal creatinine, how many aren't 70 yet?",
+                question="Among subjects with abnormal sample score, how many aren't 70 yet?",
             )["output"]
         )
-        assert "markdown_entity_table.birth_year" in json.dumps(links["numeric_filters"], ensure_ascii=False)
+        assert "markdown_entity_table.born_year" in json.dumps(links["numeric_filters"], ensure_ascii=False)
 
 
 def test_link_question_to_data_includes_markdown_entity_table_join_hints() -> None:
@@ -1846,13 +1887,13 @@ def test_link_question_to_data_includes_markdown_entity_table_join_hints() -> No
         context_path = Path(temp_dir)
         (context_path / "doc").mkdir()
         (context_path / "json").mkdir()
-        (context_path / "doc" / "heroes.md").write_text(
-            "The operative Alpha, registered under ID 7, has a height of 175.0 centimeters. "
-            "Her publisher affiliation is logged with the code 13.\n",
+        (context_path / "doc" / "items.md").write_text(
+            "The item Alpha, registered under ID 7, has a height of 175.0 centimeters. "
+            "Its source affiliation is logged with the code 13.\n",
             encoding="utf-8",
         )
-        (context_path / "json" / "publisher.json").write_text(
-            json.dumps({"table": "publisher", "records": [{"id": 13, "publisher_name": "Marvel Comics"}]}),
+        (context_path / "json" / "sources.json").write_text(
+            json.dumps({"table": "source", "records": [{"id": 13, "source_name": "Atlas Records"}]}),
             encoding="utf-8",
         )
 
@@ -1864,17 +1905,17 @@ def test_link_question_to_data_includes_markdown_entity_table_join_hints() -> No
                 "print(json.dumps(links, ensure_ascii=False, sort_keys=True))\n"
             ),
             timeout_seconds=10,
-            question="What percentage of heroes with height between 150 and 180 are published by Marvel Comics?",
+            question="What percentage of items with height between 150 and 180 are linked to Atlas Records?",
         )
 
         assert result["success"]
         links = json.loads(result["output"])
         rendered = json.dumps(links, ensure_ascii=False)
-        assert links["markdown_entity_table"]["field_coverage"]["height_cm"] == 1
-        assert links["markdown_entity_table"]["field_coverage"]["publisher_id"] == 1
-        assert "markdown_entity_table.publisher_id" in rendered
-        assert "publisher.json:id" in rendered
-        assert "Marvel Comics" in rendered
+        assert links["markdown_entity_table"]["field_coverage"]["height"] == 1
+        assert links["markdown_entity_table"]["field_coverage"]["source_affiliation"] == 1
+        assert "markdown_entity_table.source_affiliation" in rendered
+        assert "sources.json:id" in rendered
+        assert "Atlas Records" in rendered
 
 
 def test_codeact_scripted_task_11() -> None:

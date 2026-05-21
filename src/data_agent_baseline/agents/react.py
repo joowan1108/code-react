@@ -157,12 +157,12 @@ STRUCTURED_SEMANTIC_CONTRACT_LINES = (
 
 LINKING_TRIGGER_TERMS = {
     "abnormal",
+    "category",
     "classification",
     "code",
     "coded",
-    "diagnosis",
-    "disease",
-    "legal",
+    "definition",
+    "label",
     "meaning",
     "normal",
     "range",
@@ -753,12 +753,12 @@ def _build_difficulty_final_answer_reminder(task: PublicTask, state: AgentRuntim
         [
             "FINAL ANSWER REMINDER (easy):",
             f"- Question: {task.question}",
+            "- Fast path: if a compact inspection or computation already produced the final table, submit `Answer:` now.",
+            "- Minimal check only: requested final columns, source file/table, and any filter or calculation.",
+            "- Do not run extra source-map, linking, or markdown-helper work unless a required concept is unresolved or conflicting.",
             "- Submit only the columns directly requested by the question.",
-            "- If multiple rows match the entity/filter, include all final rows; do not keep only the first row.",
+            "- If multiple rows match the entity/filter, include all final rows.",
             "- Remove helper/debug/join-key/source columns unless the question asks for them.",
-            "- If multiple fields look plausible, verify their observed values and roles before choosing one.",
-            "- Keep fields used only for filtering, joining, grouping, sorting, or checking out of the final answer unless requested.",
-            "- If a calculation is required, verify the source columns and operation with compact observed data before submitting.",
             "- If the final answer has more than 20 rows, do not hand-write the full Answer JSON; run Python and print `FINAL_TABLE_JSON:` instead.",
         ]
     )
@@ -1135,14 +1135,15 @@ def _loop_guard_summary(state: AgentRuntimeState) -> dict[str, object]:
             for phrase in (
                 "no explicit format",
                 "no tables",
-                "potential legality tables: []",
-                "format/legality/commander columns: []",
+                "no matching columns",
+                "candidate columns: []",
+                "potential tables: []",
             )
         ) or any(
             len(re.findall(pattern, recent_text)) >= 2
             for pattern in (
-                r"searching for [a-z0-9_\-\s]{0,40}normal range definition",
-                r"searching for [a-z0-9_\-\s]{0,40}threshold",
+                r"searching for [a-z0-9_\-\s]{0,40}(?:definition|rule|meaning)",
+                r"searching for [a-z0-9_\-\s]{0,40}(?:threshold|range|status)",
             )
         )
 
@@ -1537,14 +1538,32 @@ def _task_evidence_ledger(
                 "keywords": ("between", ">=", "<=", "numeric_filters", "boundary", "threshold", "range"),
             }
         )
-    if tokens & {"abnormal", "normal", "threshold", "range", "severe", "legal", "status", "diagnosis", "disease", "code", "coded"}:
+    semantic_rule_terms = {
+        "abnormal",
+        "category",
+        "classification",
+        "code",
+        "coded",
+        "definition",
+        "label",
+        "meaning",
+        "normal",
+        "range",
+        "rule",
+        "severe",
+        "status",
+        "threshold",
+        "type",
+        "warning",
+    }
+    if tokens & semantic_rule_terms:
         requirements.append(
             {
                 "id": "semantic_rule_or_threshold",
-                "question_terms": sorted(tokens & {"abnormal", "normal", "threshold", "range", "severe", "legal", "status", "diagnosis", "disease", "code", "coded"}),
+                "question_terms": sorted(tokens & semantic_rule_terms),
                 "instruction": "Find the concrete rule, coded value, threshold, or status definition before filtering.",
                 "accepted_sources": ["structured code/value table", "markdown rule", "observed values"],
-                "keywords": ("threshold", "normal range", "upper limit", "abnormal", "legal", "coded", "severity", "diagnosis"),
+                "keywords": ("threshold", "normal range", "upper limit", "abnormal", "coded", "severity", "definition", "status"),
             }
         )
     if (

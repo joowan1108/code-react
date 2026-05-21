@@ -112,12 +112,12 @@ Answer:
 
 KNOWLEDGE_TRIGGER_TERMS = {
     "abnormal",
+    "category",
     "classification",
     "code",
     "coded",
-    "diagnosis",
-    "disease",
-    "legal",
+    "definition",
+    "label",
     "meaning",
     "normal",
     "range",
@@ -138,10 +138,10 @@ def build_system_prompt(tool_descriptions: str, system_prompt: str | None = None
             "If the previous observation contains a plausible final result, your next step should be `Answer`, "
             "not more exploration. When printing final rows from Python, prefix them with `FINAL_TABLE_JSON:`. "
             "`FINAL_TABLE_JSON:` is only for the exact final answer table, never for previews or samples. "
-            "Before finalizing, keep a compact source map in your reasoning or Python prints: final output fields, "
+            "For simple tasks, use the manifest plus one compact inspection, compute the final table, and submit without extra grounding. "
+            "For ambiguous tasks, keep a compact source map in your reasoning or Python prints: final output fields, "
             "filters, joins, grouping or sorting keys, calculations, and row grain. "
-            "Do not rely on column names alone; verify important mappings with observed values or records. "
-            "If multiple sources could satisfy a concept, inspect compact samples and choose the source whose values match the concept's role. "
+            "Do not rely on column names alone when the mapping is ambiguous; verify important mappings with observed values or records. "
             "Keep fields used only for filtering, joining, grouping, sorting, or verification out of the final answer unless the question explicitly asks for them. "
             "If the final answer has more than 20 rows, do not hand-write the full Answer JSON; print `FINAL_TABLE_JSON:` from Python instead. "
             "For JSON files, prefer direct `load_json_table(path)` or `load_json_records(path)` calls so `{table, records}` "
@@ -271,9 +271,25 @@ def _markdown_helper_note(task: PublicTask) -> str:
     )
 
 
+def _codeact_task_strategy_note(task: PublicTask) -> str:
+    if task.difficulty.casefold() == "easy":
+        return (
+            "Easy task fast path: use the manifest and at most one compact inspection unless there is an error or real ambiguity. "
+            "Before computing, identify only the requested final columns, the source file/table, and any filter or calculation. "
+            "Do not build a full source map or call linking/markdown helpers unless the first inspection shows that a required concept "
+            "is absent from structured data or multiple plausible sources conflict. "
+        )
+    return (
+        "Before computing, ground structured-data semantics with a compact source map: final output fields, "
+        "filters, joins, grouping or sorting keys, calculations, and row grain. "
+        "If multiple sources could satisfy a concept, compare observed values before choosing one. "
+    )
+
+
 def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
     context_manifest = build_context_manifest(task.context_dir, question=task.question)
     if codeact:
+        task_strategy_note = _codeact_task_strategy_note(task)
         return (
             f"Question: {task.question}\n"
             f"{context_manifest}\n"
@@ -285,9 +301,7 @@ def build_task_prompt(task: PublicTask, *, codeact: bool = False) -> str:
             "use those exact table and column names for joins. "
             "If a question concept is not present in the schema, do not invent or assume it; find the concrete "
             "column/table/record or markdown rule that implements it, then verify it against observed data. "
-            "Before computing, ground structured-data semantics with a compact source map: final output fields, "
-            "filters, joins, grouping or sorting keys, calculations, and row grain. "
-            "If multiple sources could satisfy a concept, compare observed values before choosing one. "
+            f"{task_strategy_note}"
             "When the final connection between question terms, markdown record IDs, and real columns is unclear, "
             "call `link_question_to_data(max_candidates=5)` once and use its row_ids, usable_filter, and join_candidates. "
             "For JSON files, prefer direct `load_json_table(\"json/file.json\")` or `load_json_records(\"json/file.json\")` calls "
