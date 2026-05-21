@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from data_agent_baseline.agents.model import ScriptedModelAdapter
+from data_agent_baseline.agents.model import ModelStep, ScriptedModelAdapter
 from data_agent_baseline.agents.manifest import build_context_manifest, _tokenize_for_linking
 from data_agent_baseline.agents.prompt import CODEACT_REACT_SYSTEM_PROMPT, build_task_prompt
 from data_agent_baseline.agents.react import (
@@ -16,9 +16,12 @@ from data_agent_baseline.agents.react import (
     _candidate_decision_from_observation,
     _evidence_consistency_warnings,
     _final_answer_check,
+    _hard_candidate_pending_verification,
     _python_repair_hints,
     _render_observation_for_prompt,
     _sanitize_answer_table,
+    _should_block_hard_unverified_answer,
+    _should_prioritize_answer_submission,
     parse_model_step,
 )
 from data_agent_baseline.agents.runtime import AgentRuntimeState, StepRecord
@@ -1005,6 +1008,118 @@ def test_evidence_consistency_warning_is_trace_only() -> None:
         assert decision.auto_submit is True
         assert decision.store_as_fallback is True
         assert "evidence_consistency_warnings_present" not in decision.reasons
+
+
+def test_hard_candidate_verification_blocks_immediate_answer() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_hard_verify",
+                difficulty="hard",
+                question="Which rows satisfy the condition?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        state.steps.append(
+            StepRecord(
+                step_index=3,
+                thought="Computed a first candidate.",
+                action="execute_python",
+                action_input={"code": "print final table"},
+                raw_response="Thought: compute\nCode:\n```python\nprint('FINAL_TABLE_JSON')\n```",
+                observation={
+                    "ok": True,
+                    "tool": "execute_python",
+                    "content": {
+                        "output": 'FINAL_TABLE_JSON:\n{"columns":["id"],"rows":[[1]]}',
+                        "hard_candidate_verification_required": True,
+                        "candidate_review_instruction": "verify independently",
+                    },
+                },
+                ok=True,
+            )
+        )
+        answer_step = ModelStep(
+            thought="I will submit the candidate.",
+            action="answer",
+            action_input={"columns": ["id"], "rows": [[1]]},
+            raw_response="",
+        )
+
+        assert _hard_candidate_pending_verification(task, state) is True
+        assert _should_block_hard_unverified_answer(task, state, answer_step) is True
+        assert (
+            _should_prioritize_answer_submission(
+                task,
+                state,
+                AnswerTable(columns=["id"], rows=[[1]]),
+                step_index=4,
+                max_steps=16,
+            )
+            is False
+        )
+
+        state.steps.append(
+            StepRecord(
+                step_index=4,
+                thought="Verified the candidate independently.",
+                action="execute_python",
+                action_input={"code": "verify independently"},
+                raw_response="Thought: verify\nCode:\n```python\nprint('ok')\n```",
+                observation={
+                    "ok": True,
+                    "tool": "execute_python",
+                    "content": {"output": "verified"},
+                },
+                ok=True,
+            )
+        )
+
+        assert _hard_candidate_pending_verification(task, state) is False
+        assert _should_block_hard_unverified_answer(task, state, answer_step) is False
+
+
+def test_hard_candidate_verification_does_not_apply_to_medium() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        context_path = Path(temp_dir)
+        task = PublicTask(
+            record=TaskRecord(
+                task_id="task_medium_verify",
+                difficulty="medium",
+                question="Which rows satisfy the condition?",
+            ),
+            assets=TaskAssets(task_dir=context_path, context_dir=context_path),
+        )
+        state = AgentRuntimeState()
+        state.steps.append(
+            StepRecord(
+                step_index=3,
+                thought="Computed a first candidate.",
+                action="execute_python",
+                action_input={"code": "print final table"},
+                raw_response="Thought: compute\nCode:\n```python\nprint('FINAL_TABLE_JSON')\n```",
+                observation={
+                    "ok": True,
+                    "tool": "execute_python",
+                    "content": {
+                        "output": 'FINAL_TABLE_JSON:\n{"columns":["id"],"rows":[[1]]}',
+                        "hard_candidate_verification_required": True,
+                    },
+                },
+                ok=True,
+            )
+        )
+        answer_step = ModelStep(
+            thought="I will submit the candidate.",
+            action="answer",
+            action_input={"columns": ["id"], "rows": [[1]]},
+            raw_response="",
+        )
+
+        assert _hard_candidate_pending_verification(task, state) is False
+        assert _should_block_hard_unverified_answer(task, state, answer_step) is False
 
 
 def test_loop_guard_warns_after_repeated_python_execution() -> None:
