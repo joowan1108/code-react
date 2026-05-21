@@ -589,6 +589,8 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
         assert "target_columns" in messages[1].content
         assert "answer_submission" in messages[1].content
         assert "Structured-data medium semantic guard" in messages[1].content
+        assert "Medium source-map protocol" in messages[1].content
+        assert "SOURCE_MAP_JSON" in messages[1].content
         assert "Row grain" in messages[1].content
         assert "Source mapping" in messages[1].content
         assert "Ambiguity check" in messages[1].content
@@ -602,6 +604,7 @@ def test_medium_planning_prefix_is_front_of_model_input() -> None:
         assert "LOOP GUARD" not in messages[1].content
         assert "evidence_ledger" not in planning_snapshot
         assert "loop_guard" not in planning_snapshot
+        assert "source_map_protocol" in planning_snapshot
         assert "Progress: model call 1/16" in messages[1].content
         assert "completed=" not in messages[1].content
         assert "done" not in messages[1].content
@@ -1241,8 +1244,9 @@ def test_medium_codeact_prompt_keeps_compact_source_map() -> None:
         prompt = build_task_prompt(task, codeact=True)
 
         assert "Easy task fast path" not in prompt
-        assert "ground structured-data semantics with a compact source map" in prompt
-        assert "grouping or sorting keys, calculations, and row grain" in prompt
+        assert "Medium task grounding" in prompt
+        assert "SOURCE_MAP_JSON" in prompt
+        assert "`final_columns`, `row_grain`, `sources`, `filters`, `joins`, `group_by`, `calculations`, and `verification`" in prompt
 
 
 def test_knowledge_reminder_skips_format_only_hard_tasks() -> None:

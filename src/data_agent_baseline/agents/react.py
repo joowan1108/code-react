@@ -51,6 +51,10 @@ EVIDENCE_CONSISTENCY_MARKERS = (
     "EVIDENCE_CONSISTENCY_JSON:",
     "CONSISTENCY_CHECK_JSON:",
 )
+SOURCE_MAP_MARKERS = (
+    "SOURCE_MAP_JSON:",
+    "SOURCE_MAP:",
+)
 
 PLANNING_DIFFICULTIES = {"medium", "hard", "extreme"}
 LINKING_REQUIREMENT_DIFFICULTIES = {"hard", "extreme"}
@@ -144,6 +148,15 @@ MEDIUM_SEMANTIC_GUARD_LINES = (
     "- Source mapping: map each requested output, condition, join, and calculation to concrete observed columns or records before computing.",
     "- Ambiguity check: when multiple sources could satisfy a concept, inspect compact samples or distinct values and choose the source whose values match the concept's role.",
     "- Empty-result check: before returning an empty table, run one targeted check over plausible sources to confirm the mapping and filters.",
+)
+
+MEDIUM_SOURCE_MAP_PROTOCOL_LINES = (
+    "Medium source-map protocol:",
+    "- In the Python step that computes the final table, print `SOURCE_MAP_JSON:` before `FINAL_TABLE_JSON:`.",
+    "- Use one compact JSON object with these keys: `final_columns`, `row_grain`, `sources`, `filters`, `joins`, `group_by`, `calculations`, and `verification`.",
+    "- `sources` should name observed files/tables/columns used for output fields, filters, joins, grouping, sorting, and calculations.",
+    "- Use empty lists or nulls when a section is not needed; do not fill fields from prior assumptions.",
+    "- This is evidence bookkeeping, not a new search step: keep it short and compute the final table in the same Python run when possible.",
 )
 
 STRUCTURED_SEMANTIC_CONTRACT_LINES = (
@@ -2006,6 +2019,7 @@ def _build_planning_context(
                 f"{node['instruction']}"
             )
         lines.extend(MEDIUM_SEMANTIC_GUARD_LINES)
+        lines.extend(MEDIUM_SOURCE_MAP_PROTOCOL_LINES)
         lines.extend(STRUCTURED_SEMANTIC_CONTRACT_LINES)
         lines.append(
             "Priority: verify real tables/columns for requested concepts, decide the exact final "
@@ -2038,6 +2052,7 @@ def _build_planning_context(
             "observed_nodes": observed_nodes,
             "nodes": node_records,
             "semantic_guard": list(MEDIUM_SEMANTIC_GUARD_LINES),
+            "source_map_protocol": list(MEDIUM_SOURCE_MAP_PROTOCOL_LINES),
             "structured_semantic_contract": list(STRUCTURED_SEMANTIC_CONTRACT_LINES),
             "prompt_prefix": prompt_prefix,
         }
@@ -2541,6 +2556,9 @@ class ReActAgent:
                         content["evidence_ledger_report"] = (
                             evidence_entries if evidence_entries else evidence_value
                         )
+                    source_map_value = _find_marker_json_value(stdout, SOURCE_MAP_MARKERS)
+                    if source_map_value is not None:
+                        content["source_map_report"] = source_map_value
                     consistency_value = _find_marker_json_value(stdout, EVIDENCE_CONSISTENCY_MARKERS)
                     if consistency_value is not None:
                         consistency_entries = _evidence_entries_from_value(consistency_value)
@@ -2573,6 +2591,14 @@ class ReActAgent:
                         review_reasons.append(
                             "semantic evidence still needs explicit grounding: "
                             + ", ".join(missing_evidence[:4])
+                        )
+                    if (
+                        _task_is_medium(task)
+                        and len(candidate_answer.rows) <= 20
+                        and content.get("source_map_report") is None
+                    ):
+                        review_reasons.append(
+                            "medium source map is missing; confirm final columns, row grain, sources, filters, joins, and calculations"
                         )
                     if len(candidate_answer.rows) <= 20:
                         review_reasons.append("candidate has <=20 rows, so the model should confirm final shape")

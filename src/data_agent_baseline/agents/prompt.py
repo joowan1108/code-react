@@ -279,6 +279,13 @@ def _codeact_task_strategy_note(task: PublicTask) -> str:
             "Do not build a full source map or call linking/markdown helpers unless the first inspection shows that a required concept "
             "is absent from structured data or multiple plausible sources conflict. "
         )
+    if task.difficulty.casefold() == "medium":
+        return (
+            "Medium task grounding: before finalizing, keep a compact source map for the final computation. "
+            "In the Python step that computes the final table, print `SOURCE_MAP_JSON:` before `FINAL_TABLE_JSON:` with one compact JSON object "
+            "containing `final_columns`, `row_grain`, `sources`, `filters`, `joins`, `group_by`, `calculations`, and `verification`. "
+            "Use observed files/tables/columns/values only; use empty lists or nulls for sections that are not needed. "
+        )
     return (
         "Before computing, ground structured-data semantics with a compact source map: final output fields, "
         "filters, joins, grouping or sorting keys, calculations, and row grain. "
